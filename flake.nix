@@ -4,7 +4,7 @@
   };
 
   outputs =
-    { nixpkgs, ... }:
+    { self, nixpkgs, ... }:
     let
       systems = [
         "x86_64-linux"
@@ -82,5 +82,42 @@
       );
 
       formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixfmt-rfc-style);
+
+      nixosModules.default =
+        { config, lib, pkgs, ... }:
+        let
+          cfg = config.services.rogue-talk-server;
+        in
+        {
+          options.services.rogue-talk-server = {
+            enable = lib.mkEnableOption "rogue-talk server";
+            port = lib.mkOption {
+              type = lib.types.port;
+              default = 7777;
+              description = "Port to listen on";
+            };
+            openFirewall = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = "Open the firewall port";
+            };
+          };
+
+          config = lib.mkIf cfg.enable {
+            systemd.services.rogue-talk-server = {
+              description = "Rogue-Talk Server";
+              wantedBy = [ "multi-user.target" ];
+              after = [ "network.target" ];
+              serviceConfig = {
+                ExecStart = "${self.packages.${pkgs.system}.server}/bin/rogue-talk-server --host 0.0.0.0 --port ${toString cfg.port}";
+                DynamicUser = true;
+                Restart = "on-failure";
+              };
+            };
+
+            networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ cfg.port ];
+            networking.firewall.allowedUDPPorts = lib.mkIf cfg.openFirewall [ cfg.port ];
+          };
+        };
     };
 }
