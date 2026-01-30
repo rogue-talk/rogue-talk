@@ -5,6 +5,8 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 
+from ..common import tiles as tile_defs
+
 
 @dataclass
 class Level:
@@ -52,11 +54,11 @@ class Level:
         )
 
     def is_walkable(self, x: int, y: int) -> bool:
-        """Check if a tile is walkable (floor)."""
+        """Check if a tile is walkable."""
         if x < 0 or x >= self.width or y < 0 or y >= self.height:
             return False
         tile = self.tiles[y][x]
-        return tile == "."
+        return tile_defs.is_walkable(tile)
 
     def get_tile(self, x: int, y: int) -> str:
         """Get the character at a position, or space for out-of-bounds."""

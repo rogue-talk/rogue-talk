@@ -2,6 +2,7 @@
 
 from blessed import Terminal
 
+from ..common import tiles
 from ..common.protocol import PlayerInfo
 from .level import Level
 from .viewport import Viewport
@@ -96,8 +97,9 @@ class TerminalUI:
                 else:
                     return str(self.term.bold_yellow("@"))
 
-        # Get tile from level (returns space for out-of-bounds)
-        return level.get_tile(x, y)
+        # Get tile from level and render with color
+        tile_char = level.get_tile(x, y)
+        return tiles.render_tile(tile_char, self.term)
 
     def cleanup(self) -> None:
         """Restore terminal state."""

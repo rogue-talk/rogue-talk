@@ -5,6 +5,8 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 
+from ..common import tiles as tile_defs
+
 
 @dataclass
 class Level:
@@ -36,7 +38,7 @@ class Level:
         return self.tiles[y][x]
 
     def is_walkable(self, x: int, y: int) -> bool:
-        """Check if a tile is walkable (floor)."""
+        """Check if a tile is walkable."""
         if x < 0 or x >= self.width or y < 0 or y >= self.height:
             return False
-        return self.tiles[y][x] == "."
+        return tile_defs.is_walkable(self.tiles[y][x])
