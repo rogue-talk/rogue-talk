@@ -196,17 +196,19 @@ class TerminalUI:
 
         # Get tile from level and render with lighting
         tile_char = level.get_tile(x, y)
-        return self._render_tile_with_lighting(tile_char, distance)
+        return self._render_tile_with_lighting(tile_char, distance, x)
 
-    def _render_tile_with_lighting(self, tile_char: str, distance: float) -> str:
+    def _render_tile_with_lighting(
+        self, tile_char: str, distance: float, tile_x: int = 0
+    ) -> str:
         """Render a tile with distance-based lighting effects."""
         tile_def = tiles.get_tile(tile_char)
 
         # Determine color based on animation for animated tiles
+        # Offset by tile_x so animation flows left to right
         if tile_def.animation_colors:
-            color_name = tile_def.animation_colors[
-                self.anim_frame % len(tile_def.animation_colors)
-            ]
+            anim_index = (self.anim_frame + tile_x) % len(tile_def.animation_colors)
+            color_name = tile_def.animation_colors[anim_index]
         elif tile_def.bold:
             color_name = f"bold_{tile_def.color}"
         else:
