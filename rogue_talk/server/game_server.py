@@ -235,7 +235,13 @@ class GameServer:
                 msg_type, payload = await read_message(reader)
                 await self._handle_message(player, msg_type, payload)
 
-        except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError):
+        except (
+            asyncio.IncompleteReadError,
+            ConnectionResetError,
+            BrokenPipeError,
+            TimeoutError,
+            OSError,
+        ):
             pass
         finally:
             if player:
