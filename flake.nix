@@ -15,6 +15,46 @@
       forAllSystems = nixpkgs.lib.genAttrs systems;
     in
     {
+      packages = forAllSystems (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          python = pkgs.python312;
+          rogue-talk = python.pkgs.buildPythonApplication {
+            pname = "rogue-talk";
+            version = "0.1.0";
+            src = ./.;
+            pyproject = true;
+
+            build-system = [ python.pkgs.setuptools ];
+
+            dependencies = with python.pkgs; [
+              blessed
+              sounddevice
+              opuslib
+              numpy
+            ];
+
+            makeWrapperArgs = [
+              "--prefix LD_LIBRARY_PATH : ${
+                pkgs.lib.makeLibraryPath [
+                  pkgs.libopus
+                  pkgs.portaudio
+                ]
+              }"
+            ];
+
+            meta.mainProgram = "rogue-talk-client";
+          };
+        in
+        {
+          inherit rogue-talk;
+          default = rogue-talk;
+          client = rogue-talk.overrideAttrs { meta.mainProgram = "rogue-talk-client"; };
+          server = rogue-talk.overrideAttrs { meta.mainProgram = "rogue-talk-server"; };
+        }
+      );
+
       devShells = forAllSystems (
         system:
         let
