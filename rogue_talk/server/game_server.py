@@ -43,9 +43,7 @@ class GameServer:
         async with server:
             await server.serve_forever()
 
-    async def handle_client(
-        self, reader: StreamReader, writer: StreamWriter
-    ) -> None:
+    async def handle_client(self, reader: StreamReader, writer: StreamWriter) -> None:
         player: Player | None = None
         try:
             # Wait for CLIENT_HELLO

@@ -28,13 +28,17 @@ class TerminalUI:
         for y in range(room_height):
             row = ""
             for x in range(room_width):
-                char = self._get_cell_char(x, y, room_width, room_height, players, local_player_id)
+                char = self._get_cell_char(
+                    x, y, room_width, room_height, players, local_player_id
+                )
                 row += char
             output.append(row)
 
         # Status bar
         output.append("")
-        local_player = next((p for p in players if p.player_id == local_player_id), None)
+        local_player = next(
+            (p for p in players if p.player_id == local_player_id), None
+        )
         mute_status = self.term.red("MUTED") if is_muted else self.term.green("LIVE")
         player_count = len(players)
 

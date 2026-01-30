@@ -12,7 +12,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Rogue-Talk Client")
     parser.add_argument("--host", default=DEFAULT_HOST, help="Server host")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Server port")
-    parser.add_argument("--name", default=os.environ.get("USER", "player"), help="Player name")
+    parser.add_argument(
+        "--name", default=os.environ.get("USER", "player"), help="Player name"
+    )
     args = parser.parse_args()
 
     client = GameClient(args.host, args.port, args.name)

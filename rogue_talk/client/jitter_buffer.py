@@ -3,6 +3,7 @@
 import collections
 from dataclasses import dataclass
 
+
 @dataclass
 class AudioPacket:
     timestamp_ms: int

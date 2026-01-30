@@ -10,7 +10,9 @@ from .game_server import GameServer
 def main() -> None:
     parser = argparse.ArgumentParser(description="Rogue-Talk Server")
     parser.add_argument("--host", default=DEFAULT_HOST, help="Host to bind to")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Port to bind to")
+    parser.add_argument(
+        "--port", type=int, default=DEFAULT_PORT, help="Port to bind to"
+    )
     args = parser.parse_args()
 
     server = GameServer(args.host, args.port)

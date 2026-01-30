@@ -1,10 +1,16 @@
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    treefmt-nix.url = "github:numtide/treefmt-nix";
   };
 
   outputs =
-    { self, nixpkgs, ... }:
+    {
+      self,
+      nixpkgs,
+      treefmt-nix,
+      ...
+    }:
     let
       systems = [
         "x86_64-linux"
@@ -81,10 +87,22 @@
         }
       );
 
-      formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixfmt-rfc-style);
+      formatter = forAllSystems (
+        system:
+        (treefmt-nix.lib.evalModule nixpkgs.legacyPackages.${system} {
+          projectRootFile = "flake.nix";
+          programs.nixfmt.enable = true;
+          programs.ruff-format.enable = true;
+        }).config.build.wrapper
+      );
 
       nixosModules.default =
-        { config, lib, pkgs, ... }:
+        {
+          config,
+          lib,
+          pkgs,
+          ...
+        }:
         let
           cfg = config.services.rogue-talk-server;
         in
@@ -109,7 +127,9 @@
               wantedBy = [ "multi-user.target" ];
               after = [ "network.target" ];
               serviceConfig = {
-                ExecStart = "${self.packages.${pkgs.system}.server}/bin/rogue-talk-server --host 0.0.0.0 --port ${toString cfg.port}";
+                ExecStart = "${
+                  self.packages.${pkgs.system}.server
+                }/bin/rogue-talk-server --host 0.0.0.0 --port ${toString cfg.port}";
                 DynamicUser = true;
                 Restart = "on-failure";
               };
