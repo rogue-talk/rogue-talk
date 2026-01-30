@@ -1,6 +1,7 @@
 """Terminal UI rendering with blessed and viewport support."""
 
 import math
+import time
 
 from blessed import Terminal
 
@@ -21,10 +22,14 @@ LIGHT_FADING_RADIUS = 32  # Very dark, almost invisible
 LIGHT_BLOCKING_TILES = {"#", "O"}  # Walls and pillars
 
 
+ANIM_INTERVAL = 0.25  # Seconds between animation frames
+
+
 class TerminalUI:
     def __init__(self, terminal: Terminal):
         self.term = terminal
         self.anim_frame = 0
+        self._last_anim_time = time.monotonic()
 
     def _get_viewport(self) -> Viewport:
         """Get viewport sized to current terminal dimensions."""
@@ -87,8 +92,11 @@ class TerminalUI:
         mic_level: float = 0.0,
     ) -> None:
         """Render the game state to the terminal."""
-        # Advance animation frame
-        self.anim_frame += 1
+        # Advance animation frame based on time (not render rate)
+        now = time.monotonic()
+        if now - self._last_anim_time >= ANIM_INTERVAL:
+            self.anim_frame += 1
+            self._last_anim_time = now
 
         output = []
 
