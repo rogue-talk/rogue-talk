@@ -10,19 +10,26 @@ from .level import Level
 from .viewport import Viewport
 
 # Lighting constants - gradual fade zones
-LIGHT_FULL_RADIUS = 4  # Full brightness (bold)
-LIGHT_NORMAL_RADIUS = 7  # Normal brightness
-LIGHT_DIM_RADIUS = 10  # Slightly dim
-LIGHT_DARKER_RADIUS = 13  # Darker (gray tones)
-LIGHT_FADING_RADIUS = 15  # Very dark, almost invisible
+LIGHT_FULL_RADIUS = 8  # Full brightness (bold)
+LIGHT_NORMAL_RADIUS = 14  # Normal brightness
+LIGHT_DIM_RADIUS = 20  # Slightly dim
+LIGHT_DARKER_RADIUS = 26  # Darker (gray tones)
+LIGHT_FADING_RADIUS = 32  # Very dark, almost invisible
 # Beyond LIGHT_FADING_RADIUS: invisible
 
 
 class TerminalUI:
     def __init__(self, terminal: Terminal):
         self.term = terminal
-        self.viewport = Viewport(width=40, height=20)
         self.anim_frame = 0
+
+    def _get_viewport(self) -> Viewport:
+        """Get viewport sized to current terminal dimensions."""
+        # Reserve lines for status bar, mic level, player list, controls
+        reserved_lines = 10
+        height = max(10, self.term.height - reserved_lines)
+        width = max(20, self.term.width)
+        return Viewport(width=width, height=height)
 
     def render(
         self,
@@ -43,15 +50,18 @@ class TerminalUI:
         # Clear screen and move to top
         output.append(self.term.home + self.term.clear)
 
+        # Get viewport sized to terminal
+        viewport = self._get_viewport()
+
         # Calculate camera position centered on player
-        cam_x, cam_y = self.viewport.calculate_camera(
+        cam_x, cam_y = viewport.calculate_camera(
             player_x, player_y, level.width, level.height
         )
 
         # Draw the visible portion of the level
-        for vy in range(self.viewport.height):
+        for vy in range(viewport.height):
             row = ""
-            for vx in range(self.viewport.width):
+            for vx in range(viewport.width):
                 # Convert viewport coordinates to level coordinates
                 lx = cam_x + vx
                 ly = cam_y + vy
