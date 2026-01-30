@@ -1,5 +1,7 @@
 """Terminal UI rendering with blessed and viewport support."""
 
+import math
+
 from blessed import Terminal
 
 from ..common import tiles
@@ -7,11 +9,20 @@ from ..common.protocol import PlayerInfo
 from .level import Level
 from .viewport import Viewport
 
+# Lighting constants - gradual fade zones
+LIGHT_FULL_RADIUS = 4  # Full brightness (bold)
+LIGHT_NORMAL_RADIUS = 7  # Normal brightness
+LIGHT_DIM_RADIUS = 10  # Slightly dim
+LIGHT_DARKER_RADIUS = 13  # Darker (gray tones)
+LIGHT_FADING_RADIUS = 15  # Very dark, almost invisible
+# Beyond LIGHT_FADING_RADIUS: invisible
+
 
 class TerminalUI:
     def __init__(self, terminal: Terminal):
         self.term = terminal
         self.viewport = Viewport(width=40, height=20)
+        self.anim_frame = 0
 
     def render(
         self,
@@ -24,6 +35,9 @@ class TerminalUI:
         mic_level: float = 0.0,
     ) -> None:
         """Render the game state to the terminal."""
+        # Advance animation frame
+        self.anim_frame += 1
+
         output = []
 
         # Clear screen and move to top
@@ -41,7 +55,9 @@ class TerminalUI:
                 # Convert viewport coordinates to level coordinates
                 lx = cam_x + vx
                 ly = cam_y + vy
-                char = self._get_cell_char(lx, ly, level, players, local_player_id)
+                char = self._get_cell_char(
+                    lx, ly, level, players, local_player_id, player_x, player_y
+                )
                 row += char
             output.append(row)
 
@@ -87,19 +103,90 @@ class TerminalUI:
         level: Level,
         players: list[PlayerInfo],
         local_player_id: int,
+        player_x: int,
+        player_y: int,
     ) -> str:
-        """Get the character to display at a cell."""
+        """Get the character to display at a cell with distance-based lighting."""
+        # Calculate distance from player
+        dx = x - player_x
+        dy = y - player_y
+        distance = math.sqrt(dx * dx + dy * dy)
+
+        # Beyond visibility range - show empty
+        if distance > LIGHT_FADING_RADIUS:
+            return " "
+
         # Check for players at this position
         for p in players:
             if p.x == x and p.y == y:
                 if p.player_id == local_player_id:
                     return str(self.term.bold_green("@"))
                 else:
-                    return str(self.term.bold_yellow("@"))
+                    # Other players also affected by distance
+                    if distance <= LIGHT_FULL_RADIUS:
+                        return str(self.term.bold_yellow("@"))
+                    elif distance <= LIGHT_NORMAL_RADIUS:
+                        return str(self.term.yellow("@"))
+                    elif distance <= LIGHT_DIM_RADIUS:
+                        return str(self.term.color(229)("@"))  # type: ignore
+                    elif distance <= LIGHT_DARKER_RADIUS:
+                        return str(self.term.color(245)("@"))  # type: ignore
+                    else:
+                        return str(self.term.color(240)("@"))  # type: ignore
 
-        # Get tile from level and render with color
+        # Get tile from level and render with lighting
         tile_char = level.get_tile(x, y)
-        return tiles.render_tile(tile_char, self.term)
+        return self._render_tile_with_lighting(tile_char, distance)
+
+    def _render_tile_with_lighting(self, tile_char: str, distance: float) -> str:
+        """Render a tile with distance-based lighting effects."""
+        tile_def = tiles.get_tile(tile_char)
+
+        # Determine color based on animation for animated tiles
+        if tile_def.animation_colors:
+            color_name = tile_def.animation_colors[
+                self.anim_frame % len(tile_def.animation_colors)
+            ]
+        elif tile_def.bold:
+            color_name = f"bold_{tile_def.color}"
+        else:
+            color_name = tile_def.color
+
+        # Apply lighting based on distance - gradual fade
+        if distance <= LIGHT_FULL_RADIUS:
+            # Full brightness - use bold variant if available
+            if not color_name.startswith("bold_"):
+                bold_color = f"bold_{color_name}"
+                if hasattr(self.term, bold_color):
+                    color_name = bold_color
+            color_fn = getattr(self.term, color_name, None)
+            if color_fn:
+                return str(color_fn(tile_def.char))
+            return tile_def.char
+
+        elif distance <= LIGHT_NORMAL_RADIUS:
+            # Normal brightness - strip bold if present
+            if color_name.startswith("bold_"):
+                color_name = color_name[5:]
+            color_fn = getattr(self.term, color_name, None)
+            if color_fn:
+                return str(color_fn(tile_def.char))
+            return tile_def.char
+
+        elif distance <= LIGHT_DIM_RADIUS:
+            # Slightly dim - use dim + color
+            if color_name.startswith("bold_"):
+                color_name = color_name[5:]
+            color_attr = getattr(self.term, color_name, "")
+            return f"{self.term.dim}{color_attr}{tile_def.char}{self.term.normal}"
+
+        elif distance <= LIGHT_DARKER_RADIUS:
+            # Darker - use medium gray (256-color: 245)
+            return str(self.term.color(245)(tile_def.char))  # type: ignore
+
+        else:
+            # Fading - use dark gray (256-color: 239)
+            return str(self.term.color(239)(tile_def.char))  # type: ignore
 
     def cleanup(self) -> None:
         """Restore terminal state."""
