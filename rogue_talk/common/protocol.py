@@ -18,6 +18,7 @@ class MessageType(enum.IntEnum):
     POSITION_ACK = 0x09  # Server acknowledges a position update
     LEVEL_PACK_REQUEST = 0x10  # Client -> Server: Request level by name
     LEVEL_PACK_DATA = 0x11  # Server -> Client: Tarball bytes
+    DOOR_TRANSITION = 0x12  # Server -> Client: Player entered door, load new level
 
 
 @dataclass
@@ -211,3 +212,16 @@ def serialize_level_pack_data(tarball: bytes) -> bytes:
 def deserialize_level_pack_data(data: bytes) -> bytes:
     tarball_len = struct.unpack(">I", data[:4])[0]
     return data[4 : 4 + tarball_len]
+
+
+# DOOR_TRANSITION: target_level, spawn_x, spawn_y
+def serialize_door_transition(target_level: str, spawn_x: int, spawn_y: int) -> bytes:
+    level_bytes = target_level.encode("utf-8")
+    return struct.pack(">H", len(level_bytes)) + level_bytes + struct.pack(">HH", spawn_x, spawn_y)
+
+
+def deserialize_door_transition(data: bytes) -> tuple[str, int, int]:
+    level_len = struct.unpack(">H", data[:2])[0]
+    target_level = data[2 : 2 + level_len].decode("utf-8")
+    spawn_x, spawn_y = struct.unpack(">HH", data[2 + level_len : 2 + level_len + 4])
+    return target_level, spawn_x, spawn_y

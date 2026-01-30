@@ -9,6 +9,17 @@ from ..common import tiles as tile_defs
 
 
 @dataclass
+class DoorInfo:
+    """Metadata for a door/teleporter at a specific position."""
+
+    x: int
+    y: int
+    target_level: str | None  # None means same level (teleporter)
+    target_x: int
+    target_y: int
+
+
+@dataclass
 class Level:
     """Represents a game level loaded from an ASCII file."""
 
@@ -16,6 +27,7 @@ class Level:
     height: int
     tiles: list[list[str]]
     spawn_positions: list[tuple[int, int]] = field(default_factory=list)
+    doors: dict[tuple[int, int], DoorInfo] = field(default_factory=dict)
 
     @classmethod
     def from_file(cls, path: str) -> Level:
@@ -83,6 +95,10 @@ class Level:
                     return x, y
         # Last resort
         return self.width // 2, self.height // 2
+
+    def get_door_at(self, x: int, y: int) -> DoorInfo | None:
+        """Get door info at position, or None if no door defined there."""
+        return self.doors.get((x, y))
 
     def to_bytes(self) -> bytes:
         """Serialize level data for network transmission."""

@@ -18,6 +18,7 @@ from ..common.protocol import (
     MessageType,
     PlayerInfo,
     deserialize_audio_frame,
+    deserialize_door_transition,
     deserialize_level_pack_data,
     deserialize_player_joined,
     deserialize_player_left,
@@ -254,6 +255,89 @@ class GameClient:
                 self.audio_playback.receive_audio_frame(
                     frame.player_id, frame.timestamp_ms, frame.opus_data, frame.volume
                 )
+
+        elif msg_type == MessageType.DOOR_TRANSITION:
+            await self._handle_door_transition(payload)
+
+    async def _handle_door_transition(self, payload: bytes) -> None:
+        """Handle a door transition to a new level."""
+        target_level, spawn_x, spawn_y = deserialize_door_transition(payload)
+
+        if not self.writer or not self.reader:
+            return
+
+        # Request the new level pack
+        await write_message(
+            self.writer,
+            MessageType.LEVEL_PACK_REQUEST,
+            serialize_level_pack_request(target_level),
+        )
+
+        # Wait for LEVEL_PACK_DATA, handling other messages that may arrive first
+        # (e.g., POSITION_ACK sent by server after DOOR_TRANSITION)
+        while True:
+            msg_type, pack_payload = await read_message(self.reader)
+            if msg_type == MessageType.LEVEL_PACK_DATA:
+                break
+            # Handle other messages normally while waiting
+            await self._handle_server_message(msg_type, pack_payload)
+
+        tarball_data = deserialize_level_pack_data(pack_payload)
+        if not tarball_data:
+            return
+
+        # Clean up old temp directory and create new one
+        if self._temp_dir:
+            self._temp_dir.cleanup()
+        self._temp_dir = tempfile.TemporaryDirectory(prefix="rogue_talk_")
+        extract_dir = Path(self._temp_dir.name)
+
+        try:
+            level_pack = extract_level_pack(tarball_data, extract_dir)
+        except ValueError:
+            return
+
+        # Load custom tiles if present
+        if level_pack.tiles_path:
+            tile_defs.reload_tiles(level_pack.tiles_path)
+        else:
+            # Reset to default tiles
+            tile_defs.reload_tiles()
+
+        # Load the new level from the pack
+        with open(level_pack.level_path, encoding="utf-8") as f:
+            level_content = f.read()
+
+        # Parse level dimensions from content
+        lines = level_content.rstrip("\n").split("\n")
+        height = len(lines)
+        width = max(len(line) for line in lines) if lines else 0
+
+        # Create tiles list
+        tiles: list[list[str]] = []
+        for line in lines:
+            row: list[str] = []
+            for x in range(width):
+                if x < len(line):
+                    char = line[x]
+                    # Convert spawn markers to floor
+                    if char == "S":
+                        char = "."
+                else:
+                    char = " "
+                row.append(char)
+            tiles.append(row)
+
+        self.level = Level(width=width, height=height, tiles=tiles)
+        self.room_width = width
+        self.room_height = height
+
+        # Update position to spawn point (server will also send POSITION_ACK)
+        self.x = spawn_x
+        self.y = spawn_y
+
+        # Clear pending moves since we're in a new level
+        self._pending_moves.clear()
 
     async def _handle_input(self, key: Keystroke) -> None:
         """Handle keyboard input."""

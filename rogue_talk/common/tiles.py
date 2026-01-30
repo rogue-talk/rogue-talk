@@ -23,6 +23,8 @@ class TileDef:
     animation_colors: list[str] = field(default_factory=list)
     blocks_sight: bool | None = None  # None means use !walkable as default
     blocks_sound: bool | None = None  # None means use !walkable as default
+    # If true, this tile is a door/teleporter (target defined in level.json)
+    is_door: bool = False
 
     def __post_init__(self) -> None:
         """Set default values for blocks_sight and blocks_sound based on walkable."""
@@ -53,6 +55,7 @@ def _load_tiles_from_json(json_path: Path | None = None) -> tuple[dict[str, Tile
             animation_colors=tile_data.get("animation_colors") or [],
             blocks_sight=tile_data.get("blocks_sight"),
             blocks_sound=tile_data.get("blocks_sound"),
+            is_door=tile_data.get("is_door", False),
         )
 
     default_data = data["default"]

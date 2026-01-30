@@ -13,3 +13,4 @@ class Player:
     reader: StreamReader
     writer: StreamWriter
     is_muted: bool = False
+    current_level: str = "main"  # Name of the level the player is currently on
