@@ -3,9 +3,6 @@
 import collections
 from dataclasses import dataclass
 
-from ..common.constants import JITTER_BUFFER_MS
-
-
 @dataclass
 class AudioPacket:
     timestamp_ms: int
@@ -16,8 +13,8 @@ class AudioPacket:
 class JitterBuffer:
     """Buffers audio packets to smooth out network jitter."""
 
-    def __init__(self, buffer_size_ms: int = JITTER_BUFFER_MS):
-        self.buffer_size_ms = buffer_size_ms
+    def __init__(self, min_packets: int = 3):
+        self.min_packets = min_packets
         self.packets: collections.deque[AudioPacket] = collections.deque()
         self.playback_started = False
 
@@ -37,12 +34,9 @@ class JitterBuffer:
         if not self.packets:
             return None
 
-        # Wait for buffer to fill before starting
+        # Wait for a few packets before starting playback
         if not self.playback_started:
-            if len(self.packets) < 2:
-                return None
-            total_buffered = self.packets[-1].timestamp_ms - self.packets[0].timestamp_ms
-            if total_buffered < self.buffer_size_ms:
+            if len(self.packets) < self.min_packets:
                 return None
             self.playback_started = True
 

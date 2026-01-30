@@ -43,6 +43,8 @@ class GameClient:
         self.ui = TerminalUI(self.term)
         self.audio_capture = None
         self.audio_playback = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._audio_queue: asyncio.Queue | None = None
 
     async def connect(self) -> bool:
         """Connect to the server and complete handshake."""
@@ -73,12 +75,15 @@ class GameClient:
     async def run(self) -> None:
         """Main client loop."""
         self.running = True
+        self._loop = asyncio.get_running_loop()
+        self._audio_queue = asyncio.Queue()
 
         # Start audio if available
         await self._start_audio()
 
         # Start network receiver task
         receiver_task = asyncio.create_task(self._receive_messages())
+        audio_sender_task = asyncio.create_task(self._send_audio_frames())
 
         try:
             with self.term.fullscreen(), self.term.cbreak(), self.term.hidden_cursor():
@@ -89,13 +94,18 @@ class GameClient:
                     if key:
                         await self._handle_input(key)
 
-                    # Let audio tasks run
+                    # Let other tasks run
                     await asyncio.sleep(0)
         finally:
             self.running = False
             receiver_task.cancel()
+            audio_sender_task.cancel()
             try:
                 await receiver_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await audio_sender_task
             except asyncio.CancelledError:
                 pass
             await self._stop_audio()
@@ -219,24 +229,36 @@ class GameClient:
         if self.audio_playback:
             self.audio_playback.stop()
 
-    def _on_audio_frame(self, opus_data: bytes, timestamp_ms: int) -> None:
-        """Callback when audio frame is captured."""
-        if self.is_muted or not self.writer or not self.running:
-            return
-
-        # Schedule sending in the event loop
+    async def _send_audio_frames(self) -> None:
+        """Send audio frames from the queue to the server."""
         from ..common.protocol import AudioFrame, serialize_audio_frame
 
-        frame = AudioFrame(
-            player_id=self.player_id,
-            timestamp_ms=timestamp_ms,
-            volume=1.0,  # Server will adjust
-            opus_data=opus_data,
-        )
-        asyncio.get_event_loop().call_soon_threadsafe(
-            lambda: asyncio.create_task(
-                write_message(
-                    self.writer, MessageType.AUDIO_FRAME, serialize_audio_frame(frame)
+        while self.running:
+            try:
+                opus_data, timestamp_ms = await asyncio.wait_for(
+                    self._audio_queue.get(), timeout=0.1
                 )
-            )
+                if self.writer and not self.is_muted:
+                    frame = AudioFrame(
+                        player_id=self.player_id,
+                        timestamp_ms=timestamp_ms,
+                        volume=1.0,
+                        opus_data=opus_data,
+                    )
+                    await write_message(
+                        self.writer,
+                        MessageType.AUDIO_FRAME,
+                        serialize_audio_frame(frame),
+                    )
+            except asyncio.TimeoutError:
+                continue
+
+    def _on_audio_frame(self, opus_data: bytes, timestamp_ms: int) -> None:
+        """Callback when audio frame is captured (called from audio thread)."""
+        if self.is_muted or not self._loop or not self._audio_queue or not self.running:
+            return
+
+        # Thread-safe queue put
+        self._loop.call_soon_threadsafe(
+            self._audio_queue.put_nowait, (opus_data, timestamp_ms)
         )

@@ -125,7 +125,6 @@ class GameServer:
         """Route audio frame to nearby players with volume scaling."""
         recipients = get_audio_recipients(source, self.players)
         for recipient, volume in recipients:
-            # Create frame with appropriate volume for this recipient
             routed_frame = AudioFrame(
                 player_id=source.id,
                 timestamp_ms=frame.timestamp_ms,
