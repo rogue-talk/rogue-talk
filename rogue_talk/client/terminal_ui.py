@@ -176,23 +176,24 @@ class TerminalUI:
         if not self._has_line_of_sight(player_x, player_y, x, y, level):
             return " "
 
-        # Check for players at this position
+        # Draw local player at predicted position (not server state)
+        if x == player_x and y == player_y:
+            return str(self.term.bold_green("@"))
+
+        # Check for other players at this position
         for p in players:
-            if p.x == x and p.y == y:
-                if p.player_id == local_player_id:
-                    return str(self.term.bold_green("@"))
+            if p.x == x and p.y == y and p.player_id != local_player_id:
+                # Other players affected by distance
+                if distance <= LIGHT_FULL_RADIUS:
+                    return str(self.term.bold_yellow("@"))
+                elif distance <= LIGHT_NORMAL_RADIUS:
+                    return str(self.term.yellow("@"))
+                elif distance <= LIGHT_DIM_RADIUS:
+                    return str(self.term.color(229)("@"))  # type: ignore
+                elif distance <= LIGHT_DARKER_RADIUS:
+                    return str(self.term.color(245)("@"))  # type: ignore
                 else:
-                    # Other players also affected by distance
-                    if distance <= LIGHT_FULL_RADIUS:
-                        return str(self.term.bold_yellow("@"))
-                    elif distance <= LIGHT_NORMAL_RADIUS:
-                        return str(self.term.yellow("@"))
-                    elif distance <= LIGHT_DIM_RADIUS:
-                        return str(self.term.color(229)("@"))  # type: ignore
-                    elif distance <= LIGHT_DARKER_RADIUS:
-                        return str(self.term.color(245)("@"))  # type: ignore
-                    else:
-                        return str(self.term.color(240)("@"))  # type: ignore
+                    return str(self.term.color(240)("@"))  # type: ignore
 
         # Get tile from level and render with lighting
         tile_char = level.get_tile(x, y)

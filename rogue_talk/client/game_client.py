@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 import struct
 from asyncio import StreamReader, StreamWriter
 from typing import TYPE_CHECKING, Any
@@ -114,7 +115,6 @@ class GameClient:
         try:
             with self.term.fullscreen(), self.term.cbreak(), self.term.hidden_cursor():
                 self._render()
-                render_counter = 0
                 while self.running:
                     # Drain all pending input (process buffered keys immediately)
                     had_input = False
@@ -125,18 +125,11 @@ class GameClient:
                         had_input = True
                         await self._handle_input(key)
 
-                    # If no input, do a short sleep to avoid busy-waiting
-                    if not had_input:
-                        await asyncio.sleep(0.016)  # ~60fps
+                    # Render every frame (state may have changed from network)
+                    self._render()
 
-                    # Periodic render for mic level
-                    render_counter += 1
-                    if render_counter >= 4:
-                        render_counter = 0
-                        self._render()
-
-                    # Let other tasks run
-                    await asyncio.sleep(0)
+                    # Sleep to target ~60fps and let async tasks run
+                    await asyncio.sleep(0.016)
         finally:
             self.running = False
             receiver_task.cancel()
@@ -183,7 +176,7 @@ class GameClient:
                         self.x = p.x
                         self.y = p.y
                         break
-            self._render()
+            # Don't render here - let main loop handle it to avoid render storms
 
         elif msg_type == MessageType.POSITION_ACK:
             seq, server_x, server_y = deserialize_position_ack(payload)
@@ -202,19 +195,17 @@ class GameClient:
                     if self.level.is_walkable(new_x, new_y):
                         self.x = new_x
                         self.y = new_y
-            self._render()
+            # Don't render here - let main loop handle it to avoid render storms
 
         elif msg_type == MessageType.PLAYER_JOINED:
             player_id, name = deserialize_player_joined(payload)
             # Will be updated in next WORLD_STATE
-            self._render()
 
         elif msg_type == MessageType.PLAYER_LEFT:
             player_id = deserialize_player_left(payload)
             self.players = [p for p in self.players if p.player_id != player_id]
             if self.audio_playback:
                 self.audio_playback.remove_player(player_id)
-            self._render()
 
         elif msg_type == MessageType.AUDIO_FRAME:
             frame = deserialize_audio_frame(payload)
@@ -247,20 +238,19 @@ class GameClient:
                 self.y = new_y
                 # Queue position update (non-blocking)
                 self._position_queue.put_nowait((seq, new_x, new_y))
-                self._render()
 
     async def _toggle_mute(self) -> None:
         """Toggle mute state."""
         self.is_muted = not self.is_muted
         if self.writer:
-            await write_message(
-                self.writer,
-                MessageType.MUTE_STATUS,
-                serialize_mute_status(self.is_muted),
-            )
+            # Send without blocking - write directly
+            payload = serialize_mute_status(self.is_muted)
+            length = 1 + len(payload)
+            self.writer.write(struct.pack(">I", length))
+            self.writer.write(struct.pack("B", MessageType.MUTE_STATUS))
+            self.writer.write(payload)
         if self.audio_capture:
             self.audio_capture.set_muted(self.is_muted)
-        self._render()
 
     def _render(self) -> None:
         """Render the current game state."""
