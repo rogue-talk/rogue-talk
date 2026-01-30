@@ -19,7 +19,7 @@ def main() -> None:
 
     client = GameClient(args.host, args.port, args.name)
 
-    async def run_client():
+    async def run_client() -> None:
         if await client.connect():
             await client.run()
         else:

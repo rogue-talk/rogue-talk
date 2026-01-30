@@ -1,8 +1,10 @@
 """Audio playback with decoding and mixing."""
 
 from collections import defaultdict
+from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import sounddevice as sd
 
 from ..audio.mixer import AudioMixer
@@ -14,7 +16,7 @@ from .jitter_buffer import AudioPacket, JitterBuffer
 class AudioPlayback:
     """Manages receiving, decoding, and playing back audio from multiple players."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.jitter_buffers: dict[int, JitterBuffer] = defaultdict(JitterBuffer)
         self.decoders: dict[int, OpusDecoder] = {}
         self.mixer = AudioMixer()
@@ -62,7 +64,11 @@ class AudioPlayback:
         return self.decoders[player_id]
 
     def _audio_callback(
-        self, outdata: np.ndarray, frames: int, time_info, status: sd.CallbackFlags
+        self,
+        outdata: npt.NDArray[np.float32],
+        frames: int,
+        time_info: Any,
+        status: sd.CallbackFlags,
     ) -> None:
         """Sounddevice callback - runs in separate thread."""
         # Process each player's jitter buffer

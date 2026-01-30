@@ -155,7 +155,8 @@ def serialize_player_left(player_id: int) -> bytes:
 
 
 def deserialize_player_left(data: bytes) -> int:
-    return struct.unpack(">I", data)[0]
+    result: int = struct.unpack(">I", data)[0]
+    return result
 
 
 # MUTE_STATUS: is_muted

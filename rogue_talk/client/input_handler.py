@@ -36,9 +36,9 @@ def get_movement(key: Keystroke) -> tuple[int, int] | None:
 
 def is_mute_key(key: Keystroke) -> bool:
     """Check if key is the mute toggle."""
-    return key.lower() == "m"
+    return str(key).lower() == "m"
 
 
 def is_quit_key(key: Keystroke) -> bool:
     """Check if key is the quit key."""
-    return key.lower() == "q"
+    return str(key).lower() == "q"

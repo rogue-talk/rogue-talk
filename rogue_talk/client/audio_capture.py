@@ -2,9 +2,10 @@
 
 import time
 from collections.abc import Callable
-from threading import Thread
+from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import sounddevice as sd
 
 from ..audio.opus_codec import OpusEncoder
@@ -14,7 +15,7 @@ from ..common.constants import CHANNELS, FRAME_SIZE, SAMPLE_RATE
 class AudioCapture:
     """Captures audio from microphone and encodes to Opus."""
 
-    def __init__(self, on_frame: Callable[[bytes, int], None]):
+    def __init__(self, on_frame: Callable[[bytes, int], None]) -> None:
         """
         Args:
             on_frame: Callback called with (opus_data, timestamp_ms) for each frame
@@ -50,11 +51,17 @@ class AudioCapture:
         self.is_muted = muted
 
     def _audio_callback(
-        self, indata: np.ndarray, frames: int, time_info, status: sd.CallbackFlags
+        self,
+        indata: npt.NDArray[np.float32],
+        frames: int,
+        time_info: Any,
+        status: sd.CallbackFlags,
     ) -> None:
         """Sounddevice callback - runs in separate thread."""
         # Flatten to mono if needed
-        pcm = indata[:, 0] if indata.ndim > 1 else indata.flatten()
+        pcm: npt.NDArray[np.float32] = (
+            indata[:, 0] if indata.ndim > 1 else indata.flatten()
+        )
 
         # Track audio level
         self.last_level = float(np.abs(pcm).max())

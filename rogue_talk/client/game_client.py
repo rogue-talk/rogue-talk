@@ -1,20 +1,25 @@
 """Main game client handling network and UI."""
 
+from __future__ import annotations
+
 import asyncio
 from asyncio import StreamReader, StreamWriter
+from typing import TYPE_CHECKING, Any
 
 from blessed import Terminal
+from blessed.keyboard import Keystroke
 
 from ..common.protocol import (
+    AudioFrame,
     MessageType,
     PlayerInfo,
-    WorldState,
     deserialize_audio_frame,
     deserialize_player_joined,
     deserialize_player_left,
     deserialize_server_hello,
     deserialize_world_state,
     read_message,
+    serialize_audio_frame,
     serialize_client_hello,
     serialize_mute_status,
     serialize_position_update,
@@ -23,9 +28,13 @@ from ..common.protocol import (
 from .input_handler import get_movement, is_mute_key, is_quit_key
 from .terminal_ui import TerminalUI
 
+if TYPE_CHECKING:
+    from .audio_capture import AudioCapture
+    from .audio_playback import AudioPlayback
+
 
 class GameClient:
-    def __init__(self, host: str, port: int, name: str):
+    def __init__(self, host: str, port: int, name: str) -> None:
         self.host = host
         self.port = port
         self.name = name
@@ -39,12 +48,12 @@ class GameClient:
         self.reader: StreamReader | None = None
         self.writer: StreamWriter | None = None
         self.running = False
-        self.term = Terminal()
+        self.term: Any = Terminal()
         self.ui = TerminalUI(self.term)
-        self.audio_capture = None
-        self.audio_playback = None
+        self.audio_capture: AudioCapture | None = None
+        self.audio_playback: AudioPlayback | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._audio_queue: asyncio.Queue | None = None
+        self._audio_queue: asyncio.Queue[tuple[bytes, int]] | None = None
 
     async def connect(self) -> bool:
         """Connect to the server and complete handshake."""
@@ -163,7 +172,7 @@ class GameClient:
                     frame.player_id, frame.timestamp_ms, frame.opus_data, frame.volume
                 )
 
-    async def _handle_input(self, key) -> None:
+    async def _handle_input(self, key: Keystroke) -> None:
         """Handle keyboard input."""
         if is_quit_key(key):
             self.running = False
@@ -240,10 +249,11 @@ class GameClient:
 
     async def _send_audio_frames(self) -> None:
         """Send audio frames from the queue to the server."""
-        from ..common.protocol import AudioFrame, serialize_audio_frame
-
         while self.running:
             try:
+                if self._audio_queue is None:
+                    await asyncio.sleep(0.1)
+                    continue
                 opus_data, timestamp_ms = await asyncio.wait_for(
                     self._audio_queue.get(), timeout=0.1
                 )

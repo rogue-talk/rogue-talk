@@ -83,9 +83,9 @@ class TerminalUI:
         for p in players:
             if p.x == x and p.y == y:
                 if p.player_id == local_player_id:
-                    return self.term.bold_green("@")
+                    return str(self.term.bold_green("@"))
                 else:
-                    return self.term.bold_yellow("@")
+                    return str(self.term.bold_yellow("@"))
 
         # Walls
         if x == 0 or x == room_width - 1 or y == 0 or y == room_height - 1:

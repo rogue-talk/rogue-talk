@@ -76,6 +76,7 @@
                 ps.sounddevice
                 ps.opuslib
                 ps.numpy
+                ps.mypy
               ]))
               pkgs.libopus
               pkgs.portaudio
@@ -90,10 +91,28 @@
 
       formatter = forAllSystems (
         system:
-        (treefmt-nix.lib.evalModule nixpkgs.legacyPackages.${system} {
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          python = pkgs.python312;
+          mypy = pkgs.writeShellScriptBin "mypy" ''
+            exec ${
+              python.withPackages (ps: [
+                ps.mypy
+                ps.numpy
+                ps.blessed
+              ])
+            }/bin/mypy "$@"
+          '';
+        in
+        (treefmt-nix.lib.evalModule pkgs {
           projectRootFile = "flake.nix";
           programs.nixfmt.enable = true;
           programs.ruff-format.enable = true;
+          programs.mypy = {
+            enable = true;
+            package = mypy;
+            directories."rogue_talk" = { };
+          };
         }).config.build.wrapper
       );
 
