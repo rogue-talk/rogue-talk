@@ -57,6 +57,8 @@ class GameClient:
         self.audio_playback: AudioPlayback | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._audio_queue: asyncio.Queue[tuple[bytes, int]] | None = None
+        # Queue for outgoing position updates (non-blocking sends)
+        self._position_queue: asyncio.Queue[tuple[int, int, int]] | None = None
         # Client-side prediction: track pending (unacked) moves
         self._move_seq: int = 0
         self._pending_moves: dict[int, tuple[int, int]] = {}  # seq -> (dx, dy)
@@ -98,13 +100,15 @@ class GameClient:
         self.running = True
         self._loop = asyncio.get_running_loop()
         self._audio_queue = asyncio.Queue()
+        self._position_queue = asyncio.Queue()
 
         # Start audio if available
         await self._start_audio()
 
-        # Start network receiver task
+        # Start network sender/receiver tasks
         receiver_task = asyncio.create_task(self._receive_messages())
         audio_sender_task = asyncio.create_task(self._send_audio_frames())
+        position_sender_task = asyncio.create_task(self._send_position_updates())
 
         try:
             with self.term.fullscreen(), self.term.cbreak(), self.term.hidden_cursor():
@@ -128,12 +132,17 @@ class GameClient:
             self.running = False
             receiver_task.cancel()
             audio_sender_task.cancel()
+            position_sender_task.cancel()
             try:
                 await receiver_task
             except asyncio.CancelledError:
                 pass
             try:
                 await audio_sender_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await position_sender_task
             except asyncio.CancelledError:
                 pass
             await self._stop_audio()
@@ -216,7 +225,7 @@ class GameClient:
             return
 
         movement = get_movement(key)
-        if movement and self.writer and self.level:
+        if movement and self.writer and self.level and self._position_queue:
             dx, dy = movement
             new_x = self.x + dx
             new_y = self.y + dy
@@ -227,11 +236,8 @@ class GameClient:
                 self._pending_moves[seq] = (dx, dy)
                 self.x = new_x
                 self.y = new_y
-                await write_message(
-                    self.writer,
-                    MessageType.POSITION_UPDATE,
-                    serialize_position_update(seq, new_x, new_y),
-                )
+                # Queue position update (non-blocking)
+                self._position_queue.put_nowait((seq, new_x, new_y))
                 self._render()
 
     async def _toggle_mute(self) -> None:
@@ -307,6 +313,25 @@ class GameClient:
                         self.writer,
                         MessageType.AUDIO_FRAME,
                         serialize_audio_frame(frame),
+                    )
+            except asyncio.TimeoutError:
+                continue
+
+    async def _send_position_updates(self) -> None:
+        """Send position updates from the queue to the server."""
+        while self.running:
+            try:
+                if self._position_queue is None:
+                    await asyncio.sleep(0.1)
+                    continue
+                seq, x, y = await asyncio.wait_for(
+                    self._position_queue.get(), timeout=0.1
+                )
+                if self.writer:
+                    await write_message(
+                        self.writer,
+                        MessageType.POSITION_UPDATE,
+                        serialize_position_update(seq, x, y),
                     )
             except asyncio.TimeoutError:
                 continue
