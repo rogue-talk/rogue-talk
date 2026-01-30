@@ -88,11 +88,18 @@ class GameClient:
         try:
             with self.term.fullscreen(), self.term.cbreak(), self.term.hidden_cursor():
                 self._render()
+                render_counter = 0
                 while self.running:
                     # Non-blocking input check
                     key = self.term.inkey(timeout=0.05)
                     if key:
                         await self._handle_input(key)
+
+                    # Periodic render for mic level
+                    render_counter += 1
+                    if render_counter >= 4:
+                        render_counter = 0
+                        self._render()
 
                     # Let other tasks run
                     await asyncio.sleep(0)
@@ -197,12 +204,14 @@ class GameClient:
 
     def _render(self) -> None:
         """Render the current game state."""
+        mic_level = self.audio_capture.last_level if self.audio_capture else 0.0
         self.ui.render(
             self.room_width,
             self.room_height,
             self.players,
             self.player_id,
             self.is_muted,
+            mic_level,
         )
 
     async def _start_audio(self) -> None:

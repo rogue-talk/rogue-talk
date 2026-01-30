@@ -24,6 +24,7 @@ class AudioCapture:
         self.stream: sd.InputStream | None = None
         self.is_muted = False
         self._start_time_ms = 0
+        self.last_level = 0.0
 
     def start(self) -> None:
         """Start capturing audio."""
@@ -52,11 +53,14 @@ class AudioCapture:
         self, indata: np.ndarray, frames: int, time_info, status: sd.CallbackFlags
     ) -> None:
         """Sounddevice callback - runs in separate thread."""
-        if self.is_muted:
-            return
-
         # Flatten to mono if needed
         pcm = indata[:, 0] if indata.ndim > 1 else indata.flatten()
+
+        # Track audio level
+        self.last_level = float(np.abs(pcm).max())
+
+        if self.is_muted:
+            return
 
         # Encode to Opus
         opus_data = self.encoder.encode(pcm)

@@ -16,6 +16,7 @@ class TerminalUI:
         players: list[PlayerInfo],
         local_player_id: int,
         is_muted: bool,
+        mic_level: float = 0.0,
     ) -> None:
         """Render the game state to the terminal."""
         output = []
@@ -41,6 +42,14 @@ class TerminalUI:
         if local_player:
             status += f" | Position: ({local_player.x}, {local_player.y})"
         output.append(status)
+
+        # Mic level (green 0-50%, yellow 50-90%, red 90-100%)
+        level_chars = int(mic_level * 20)
+        green_part = self.term.green("#" * min(level_chars, 10))
+        yellow_part = self.term.yellow("#" * max(0, min(level_chars - 10, 8)))
+        red_part = self.term.red("#" * max(0, level_chars - 18))
+        padding = " " * (20 - level_chars)
+        output.append(f"Mic: [{green_part}{yellow_part}{red_part}{padding}]")
 
         # Player list
         output.append("")
