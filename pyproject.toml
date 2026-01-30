@@ -8,6 +8,7 @@ dependencies = [
     "sounddevice",
     "opuslib",
     "numpy",
+    "cryptography",
 ]
 
 [project.scripts]
@@ -31,5 +32,5 @@ warn_return_any = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = ["opuslib", "sounddevice", "blessed", "blessed.keyboard"]
+module = ["opuslib", "sounddevice", "blessed", "blessed.keyboard", "cryptography", "cryptography.*"]
 ignore_missing_imports = true

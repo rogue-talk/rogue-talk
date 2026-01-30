@@ -19,6 +19,9 @@ class MessageType(enum.IntEnum):
     LEVEL_PACK_REQUEST = 0x10  # Client -> Server: Request level by name
     LEVEL_PACK_DATA = 0x11  # Server -> Client: Tarball bytes
     DOOR_TRANSITION = 0x12  # Server -> Client: Player entered door, load new level
+    AUTH_CHALLENGE = 0x20  # Server -> Client: 32-byte nonce
+    AUTH_RESPONSE = 0x21  # Client -> Server: pubkey + name + signature
+    AUTH_RESULT = 0x22  # Server -> Client: success/error code
 
 
 @dataclass
@@ -229,3 +232,43 @@ def deserialize_door_transition(data: bytes) -> tuple[str, int, int]:
     target_level = data[2 : 2 + level_len].decode("utf-8")
     spawn_x, spawn_y = struct.unpack(">HH", data[2 + level_len : 2 + level_len + 4])
     return target_level, spawn_x, spawn_y
+
+
+# AUTH_CHALLENGE: 32-byte nonce
+def serialize_auth_challenge(nonce: bytes) -> bytes:
+    return nonce
+
+
+def deserialize_auth_challenge(data: bytes) -> bytes:
+    return data[:32]
+
+
+# AUTH_RESPONSE: public_key (32 bytes) + signature (64 bytes) + name
+def serialize_auth_response(public_key: bytes, name: str, signature: bytes) -> bytes:
+    name_bytes = name.encode("utf-8")
+    return public_key + signature + struct.pack(">H", len(name_bytes)) + name_bytes
+
+
+def deserialize_auth_response(data: bytes) -> tuple[bytes, str, bytes]:
+    public_key = data[:32]
+    signature = data[32:96]
+    name_len = struct.unpack(">H", data[96:98])[0]
+    name = data[98 : 98 + name_len].decode("utf-8")
+    return public_key, name, signature
+
+
+class AuthResult(enum.IntEnum):
+    SUCCESS = 0
+    NAME_TAKEN = 1  # Name taken by different key
+    KEY_MISMATCH = 2  # Key registered with different name
+    INVALID_SIGNATURE = 3
+    INVALID_NAME = 4
+
+
+# AUTH_RESULT: result code (1 byte)
+def serialize_auth_result(result: AuthResult) -> bytes:
+    return struct.pack("B", result)
+
+
+def deserialize_auth_result(data: bytes) -> AuthResult:
+    return AuthResult(struct.unpack("B", data[:1])[0])

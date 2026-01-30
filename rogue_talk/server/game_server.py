@@ -3,21 +3,26 @@
 import asyncio
 import io
 import json
+import os
 import tarfile
 from asyncio import StreamReader, StreamWriter
 from pathlib import Path
 
+from ..common.crypto import verify_signature
 from ..common.protocol import (
     AudioFrame,
+    AuthResult,
     MessageType,
     PlayerInfo,
     deserialize_audio_frame,
-    deserialize_client_hello,
+    deserialize_auth_response,
     deserialize_level_pack_request,
     deserialize_mute_status,
     deserialize_position_update,
     read_message,
     serialize_audio_frame,
+    serialize_auth_challenge,
+    serialize_auth_result,
     serialize_door_transition,
     serialize_level_pack_data,
     serialize_player_joined,
@@ -31,14 +36,23 @@ from ..common import tiles as tile_defs
 from .audio_router import get_audio_recipients
 from .level import DoorInfo, Level
 from .player import Player
+from .storage import PlayerStorage
 from .world import World
 
 
 class GameServer:
-    def __init__(self, host: str, port: int, levels_dir: str = "./levels"):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        levels_dir: str = "./levels",
+        data_dir: str = "./data",
+    ):
         self.host = host
         self.port = port
         self.levels_dir = Path(levels_dir)
+        self.data_dir = Path(data_dir)
+        self.storage = PlayerStorage(self.data_dir)
         self.level_packs: dict[str, bytes] = {}  # name -> tarball bytes
         self.levels: dict[str, Level] = {}  # name -> parsed Level object
         self.level_tiles: dict[
@@ -193,20 +207,107 @@ class GameServer:
             if msg_type == MessageType.LEVEL_PACK_REQUEST:
                 level_name = deserialize_level_pack_request(payload)
                 await self._handle_level_pack_request(writer, level_name)
-                # Now wait for CLIENT_HELLO
-                msg_type, payload = await read_message(reader)
-
-            if msg_type != MessageType.CLIENT_HELLO:
+            else:
                 return
 
-            name = deserialize_client_hello(payload)
+            # Send AUTH_CHALLENGE with random nonce
+            nonce = os.urandom(32)
+            await write_message(
+                writer, MessageType.AUTH_CHALLENGE, serialize_auth_challenge(nonce)
+            )
+
+            # Wait for AUTH_RESPONSE
+            msg_type, payload = await read_message(reader)
+            if msg_type != MessageType.AUTH_RESPONSE:
+                return
+
+            public_key, name, signature = deserialize_auth_response(payload)
+
+            # Validate name
+            if not name or len(name) > 32 or not name.isprintable():
+                await write_message(
+                    writer,
+                    MessageType.AUTH_RESULT,
+                    serialize_auth_result(AuthResult.INVALID_NAME),
+                )
+                return
+
+            # Verify signature
+            if not verify_signature(public_key, nonce, name, signature):
+                await write_message(
+                    writer,
+                    MessageType.AUTH_RESULT,
+                    serialize_auth_result(AuthResult.INVALID_SIGNATURE),
+                )
+                return
+
+            # Check registration status
+            existing_key = self.storage.get_public_key(name)
+            existing_name = self.storage.get_name_by_key(public_key)
+
+            if existing_key is not None:
+                # Name is registered
+                if existing_key != public_key:
+                    # Name taken by different key
+                    await write_message(
+                        writer,
+                        MessageType.AUTH_RESULT,
+                        serialize_auth_result(AuthResult.NAME_TAKEN),
+                    )
+                    return
+                # Key matches, returning player
+            elif existing_name is not None:
+                # Key is registered with different name
+                await write_message(
+                    writer,
+                    MessageType.AUTH_RESULT,
+                    serialize_auth_result(AuthResult.KEY_MISMATCH),
+                )
+                return
+            else:
+                # New player, register them
+                if not self.storage.register_player(name, public_key):
+                    await write_message(
+                        writer,
+                        MessageType.AUTH_RESULT,
+                        serialize_auth_result(AuthResult.NAME_TAKEN),
+                    )
+                    return
+
+            # Auth successful
+            await write_message(
+                writer,
+                MessageType.AUTH_RESULT,
+                serialize_auth_result(AuthResult.SUCCESS),
+            )
+
+            # Get spawn position (use saved state if returning player)
+            saved_state = self.storage.get_player_state(name)
+            if saved_state:
+                spawn_x = saved_state.x
+                spawn_y = saved_state.y
+                current_level = saved_state.level
+            else:
+                spawn_x, spawn_y = self.world.get_spawn_position()
+                current_level = "main"
 
             async with self._lock:
                 player_id = self.next_player_id
                 self.next_player_id += 1
-                spawn_x, spawn_y = self.world.get_spawn_position()
-                player = Player(player_id, name, spawn_x, spawn_y, reader, writer)
+                player = Player(
+                    player_id,
+                    name,
+                    spawn_x,
+                    spawn_y,
+                    reader,
+                    writer,
+                    current_level=current_level,
+                    public_key=public_key,
+                )
                 self.players[player_id] = player
+
+            # Get the level for the player
+            player_level = self.levels.get(current_level, self.level)
 
             # Send SERVER_HELLO with level data
             await write_message(
@@ -214,11 +315,11 @@ class GameServer:
                 MessageType.SERVER_HELLO,
                 serialize_server_hello(
                     player_id,
-                    self.world.width,
-                    self.world.height,
+                    player_level.width,
+                    player_level.height,
                     spawn_x,
                     spawn_y,
-                    self.level.to_bytes(),
+                    player_level.to_bytes(),
                 ),
             )
 
@@ -228,7 +329,10 @@ class GameServer:
             # Send initial world state
             await self._send_world_state(player)
 
-            print(f"Player {name} (id={player_id}) joined at ({spawn_x}, {spawn_y})")
+            returning = " (returning)" if saved_state else ""
+            print(
+                f"Player {name} (id={player_id}) joined at ({spawn_x}, {spawn_y}){returning}"
+            )
 
             # Main message loop
             while True:
@@ -245,6 +349,10 @@ class GameServer:
             pass
         finally:
             if player:
+                # Save player state before removing
+                self.storage.save_player_state(
+                    player.name, player.x, player.y, player.current_level
+                )
                 async with self._lock:
                     self.players.pop(player.id, None)
                 await self._broadcast_player_left(player.id)

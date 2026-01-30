@@ -40,6 +40,7 @@
               sounddevice
               opuslib
               numpy
+              cryptography
             ];
 
             makeWrapperArgs = [
@@ -76,6 +77,7 @@
                 ps.sounddevice
                 ps.opuslib
                 ps.numpy
+                ps.cryptography
                 ps.mypy
               ]))
               pkgs.libopus

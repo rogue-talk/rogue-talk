@@ -18,9 +18,16 @@ def main() -> None:
         default="./levels",
         help="Directory containing level pack .tar files (default: ./levels)",
     )
+    parser.add_argument(
+        "--data-dir",
+        default="./data",
+        help="Directory for player data storage (default: ./data)",
+    )
     args = parser.parse_args()
 
-    server = GameServer(args.host, args.port, levels_dir=args.levels_dir)
+    server = GameServer(
+        args.host, args.port, levels_dir=args.levels_dir, data_dir=args.data_dir
+    )
     try:
         asyncio.run(server.start())
     except KeyboardInterrupt:

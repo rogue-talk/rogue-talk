@@ -13,11 +13,15 @@ from typing import TYPE_CHECKING, Any
 from blessed import Terminal
 from blessed.keyboard import Keystroke
 
+from ..common.crypto import sign_challenge
 from ..common.protocol import (
     AudioFrame,
+    AuthResult,
     MessageType,
     PlayerInfo,
     deserialize_audio_frame,
+    deserialize_auth_challenge,
+    deserialize_auth_result,
     deserialize_door_transition,
     deserialize_level_pack_data,
     deserialize_player_joined,
@@ -27,12 +31,13 @@ from ..common.protocol import (
     deserialize_world_state,
     read_message,
     serialize_audio_frame,
-    serialize_client_hello,
+    serialize_auth_response,
     serialize_level_pack_request,
     serialize_mute_status,
     serialize_position_update,
     write_message,
 )
+from .identity import Identity, load_or_create_identity
 from ..common import tiles as tile_defs
 from .input_handler import get_movement, is_mute_key, is_quit_key
 from .level import Level
@@ -49,6 +54,7 @@ class GameClient:
         self.host = host
         self.port = port
         self.name = name
+        self.identity: Identity | None = None
         self.player_id: int = 0
         self.x: int = 0
         self.y: int = 0
@@ -76,6 +82,9 @@ class GameClient:
 
     async def connect(self) -> bool:
         """Connect to the server and complete handshake."""
+        # Load or create identity
+        self.identity = load_or_create_identity()
+
         try:
             self.reader, self.writer = await asyncio.open_connection(
                 self.host, self.port
@@ -115,10 +124,42 @@ class GameClient:
         if level_pack.tiles_path:
             tile_defs.reload_tiles(level_pack.tiles_path)
 
-        # Send CLIENT_HELLO
+        # Wait for AUTH_CHALLENGE
+        msg_type, payload = await read_message(self.reader)
+        if msg_type != MessageType.AUTH_CHALLENGE:
+            print("Unexpected response from server (expected AUTH_CHALLENGE)")
+            return False
+
+        nonce = deserialize_auth_challenge(payload)
+
+        # Sign the challenge
+        signature = sign_challenge(self.identity.private_key, nonce, self.name)
+
+        # Send AUTH_RESPONSE
         await write_message(
-            self.writer, MessageType.CLIENT_HELLO, serialize_client_hello(self.name)
+            self.writer,
+            MessageType.AUTH_RESPONSE,
+            serialize_auth_response(self.identity.public_key, self.name, signature),
         )
+
+        # Wait for AUTH_RESULT
+        msg_type, payload = await read_message(self.reader)
+        if msg_type != MessageType.AUTH_RESULT:
+            print("Unexpected response from server (expected AUTH_RESULT)")
+            return False
+
+        auth_result = deserialize_auth_result(payload)
+        if auth_result != AuthResult.SUCCESS:
+            error_messages = {
+                AuthResult.NAME_TAKEN: "Name is already taken by another player",
+                AuthResult.KEY_MISMATCH: "Your key is registered with a different name",
+                AuthResult.INVALID_SIGNATURE: "Authentication failed (invalid signature)",
+                AuthResult.INVALID_NAME: "Invalid name",
+            }
+            print(
+                f"Authentication failed: {error_messages.get(auth_result, 'Unknown error')}"
+            )
+            return False
 
         # Wait for SERVER_HELLO
         msg_type, payload = await read_message(self.reader)
