@@ -51,14 +51,14 @@ def extract_level_pack(tarball_data: bytes, extract_dir: Path) -> LevelPack:
         raise ValueError("level.txt not found in level pack")
 
     # Find tiles.json (optional)
-    tiles_path = extract_dir / "tiles.json"
-    if not tiles_path.exists():
-        tiles_path = None
+    _tiles_path = extract_dir / "tiles.json"
+    tiles_path: Path | None = _tiles_path if _tiles_path.exists() else None
 
     # Find assets directory (optional)
-    assets_dir = extract_dir / "assets"
-    if not assets_dir.exists() or not assets_dir.is_dir():
-        assets_dir = None
+    _assets_dir = extract_dir / "assets"
+    assets_dir: Path | None = (
+        _assets_dir if _assets_dir.exists() and _assets_dir.is_dir() else None
+    )
 
     return LevelPack(
         level_path=level_path,

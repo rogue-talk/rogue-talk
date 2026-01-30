@@ -217,7 +217,11 @@ def deserialize_level_pack_data(data: bytes) -> bytes:
 # DOOR_TRANSITION: target_level, spawn_x, spawn_y
 def serialize_door_transition(target_level: str, spawn_x: int, spawn_y: int) -> bytes:
     level_bytes = target_level.encode("utf-8")
-    return struct.pack(">H", len(level_bytes)) + level_bytes + struct.pack(">HH", spawn_x, spawn_y)
+    return (
+        struct.pack(">H", len(level_bytes))
+        + level_bytes
+        + struct.pack(">HH", spawn_x, spawn_y)
+    )
 
 
 def deserialize_door_transition(data: bytes) -> tuple[str, int, int]:

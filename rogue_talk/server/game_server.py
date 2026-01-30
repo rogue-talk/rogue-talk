@@ -41,7 +41,9 @@ class GameServer:
         self.levels_dir = Path(levels_dir)
         self.level_packs: dict[str, bytes] = {}  # name -> tarball bytes
         self.levels: dict[str, Level] = {}  # name -> parsed Level object
-        self.level_tiles: dict[str, dict[str, tile_defs.TileDef]] = {}  # name -> tile definitions
+        self.level_tiles: dict[
+            str, dict[str, tile_defs.TileDef]
+        ] = {}  # name -> tile definitions
         self._load_level_packs()
         # Load "main" level for the world (for backwards compatibility)
         self.level = self.levels["main"]
@@ -53,9 +55,7 @@ class GameServer:
     def _load_level_packs(self) -> None:
         """Load all .tar level packs from the levels directory."""
         if not self.levels_dir.exists():
-            raise FileNotFoundError(
-                f"Levels directory not found: {self.levels_dir}"
-            )
+            raise FileNotFoundError(f"Levels directory not found: {self.levels_dir}")
 
         for tar_path in self.levels_dir.glob("*.tar"):
             name = tar_path.stem  # filename without .tar extension
@@ -68,22 +68,26 @@ class GameServer:
             self.level_tiles[name] = tiles
             # Count door tiles
             door_count = sum(1 for t in tiles.values() if t.is_door)
-            print(f"Loaded level pack: {name} ({level.width}x{level.height}, {door_count} door tiles)")
+            print(
+                f"Loaded level pack: {name} ({level.width}x{level.height}, {door_count} door tiles)"
+            )
 
         if "main" not in self.level_packs:
             raise FileNotFoundError(
                 f"Required level pack 'main.tar' not found in {self.levels_dir}"
             )
 
-    def _parse_level_pack(self, name: str) -> tuple[Level, dict[str, tile_defs.TileDef]]:
+    def _parse_level_pack(
+        self, name: str
+    ) -> tuple[Level, dict[str, tile_defs.TileDef]]:
         """Parse a level pack and return Level and tile definitions."""
         if name not in self.level_packs:
             raise ValueError(f"Level pack '{name}' not found")
 
         tarball_data = self.level_packs[name]
         level_content: str | None = None
-        tiles_data: dict | None = None
-        level_json_data: dict | None = None
+        tiles_data: dict[str, object] | None = None
+        level_json_data: dict[str, object] | None = None
 
         with tarfile.open(fileobj=io.BytesIO(tarball_data), mode="r:*") as tar:
             for member in tar.getmembers():
@@ -118,36 +122,57 @@ class GameServer:
 
         return level, tiles
 
-    def _parse_tiles_json(self, data: dict) -> dict[str, tile_defs.TileDef]:
+    def _parse_tiles_json(
+        self, data: dict[str, object]
+    ) -> dict[str, tile_defs.TileDef]:
         """Parse tiles.json data into TileDef objects."""
         tiles: dict[str, tile_defs.TileDef] = {}
-        for char, tile_data in data.get("tiles", {}).items():
-            tiles[char] = tile_defs.TileDef(
-                char=char,
-                walkable=tile_data["walkable"],
-                color=tile_data["color"],
-                name=tile_data.get("name", ""),
-                walking_sound=tile_data.get("walking_sound"),
-                nearby_sound=tile_data.get("nearby_sound"),
-                animation_colors=tile_data.get("animation_colors") or [],
-                blocks_sight=tile_data.get("blocks_sight"),
-                blocks_sound=tile_data.get("blocks_sound"),
-                is_door=tile_data.get("is_door", False),
+        tiles_data = data.get("tiles", {})
+        if not isinstance(tiles_data, dict):
+            return tiles
+        for char, tile_data in tiles_data.items():
+            if not isinstance(tile_data, dict):
+                continue
+            tiles[str(char)] = tile_defs.TileDef(
+                char=str(char),
+                walkable=bool(tile_data["walkable"]),
+                color=str(tile_data["color"]),
+                name=str(tile_data.get("name", "")),
+                walking_sound=str(tile_data["walking_sound"])
+                if tile_data.get("walking_sound")
+                else None,
+                nearby_sound=str(tile_data["nearby_sound"])
+                if tile_data.get("nearby_sound")
+                else None,
+                animation_colors=list(tile_data.get("animation_colors") or []),
+                blocks_sight=bool(tile_data["blocks_sight"])
+                if tile_data.get("blocks_sight") is not None
+                else None,
+                blocks_sound=bool(tile_data["blocks_sound"])
+                if tile_data.get("blocks_sound") is not None
+                else None,
+                is_door=bool(tile_data.get("is_door", False)),
             )
         return tiles
 
-    def _parse_level_json(self, level: Level, data: dict) -> None:
+    def _parse_level_json(self, level: Level, data: dict[str, object]) -> None:
         """Parse level.json data and populate Level with door metadata."""
         # Parse doors from level.json
-        for door_data in data.get("doors", []):
-            x = door_data["x"]
-            y = door_data["y"]
+        doors_data = data.get("doors", [])
+        if not isinstance(doors_data, list):
+            return
+        for door_data in doors_data:
+            if not isinstance(door_data, dict):
+                continue
+            x = int(door_data["x"])
+            y = int(door_data["y"])
+            target_level = door_data.get("target_level")
             door_info = DoorInfo(
                 x=x,
                 y=y,
-                target_level=door_data.get("target_level"),  # None = same level
-                target_x=door_data["target_x"],
-                target_y=door_data["target_y"],
+                target_level=str(target_level) if target_level else None,
+                target_x=int(door_data["target_x"]),
+                target_y=int(door_data["target_y"]),
             )
             level.doors[(x, y)] = door_info
 
@@ -280,7 +305,9 @@ class GameServer:
                 pass
         else:
             # Door to different level
-            print(f"Player {player.name} entering door -> level '{target_level_name}' at ({target_x}, {target_y})")
+            print(
+                f"Player {player.name} entering door -> level '{target_level_name}' at ({target_x}, {target_y})"
+            )
 
             # Send DOOR_TRANSITION message to client
             try:
@@ -335,7 +362,9 @@ class GameServer:
                         if tile_def.is_door:
                             door_info = current_level.get_door_at(x, y)
                             if door_info:
-                                await self._handle_door_transition(player, door_info, seq)
+                                await self._handle_door_transition(
+                                    player, door_info, seq
+                                )
                                 return  # Door transition handles ACK differently
 
             # Always send ACK with authoritative position (even if move was rejected)

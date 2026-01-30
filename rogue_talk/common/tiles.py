@@ -34,7 +34,9 @@ class TileDef:
             self.blocks_sound = not self.walkable
 
 
-def _load_tiles_from_json(json_path: Path | None = None) -> tuple[dict[str, TileDef], TileDef]:
+def _load_tiles_from_json(
+    json_path: Path | None = None,
+) -> tuple[dict[str, TileDef], TileDef]:
     """Load tile definitions from JSON file."""
     if json_path is None:
         json_path = Path(__file__).parent / "tiles.json"
