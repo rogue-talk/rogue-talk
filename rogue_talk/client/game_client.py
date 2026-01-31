@@ -39,7 +39,7 @@ from ..common.protocol import (
 )
 from .identity import Identity, load_or_create_identity
 from ..common import tiles as tile_defs
-from .input_handler import get_movement, is_mute_key, is_quit_key
+from .input_handler import get_movement, is_mute_key, is_quit_key, is_show_names_key
 from .level import Level
 from .level_pack import extract_level_pack
 from .terminal_ui import TerminalUI
@@ -62,6 +62,7 @@ class GameClient:
         self.room_height: int = 0
         self.level: Level | None = None
         self.is_muted: bool = False
+        self.show_player_names: bool = False
         self.players: list[PlayerInfo] = []
         self.reader: StreamReader | None = None
         self.writer: StreamWriter | None = None
@@ -390,6 +391,10 @@ class GameClient:
             await self._toggle_mute()
             return
 
+        if is_show_names_key(key):
+            self.show_player_names = not self.show_player_names
+            return
+
         movement = get_movement(key)
         if movement and self.writer and self.level and self._position_queue:
             dx, dy = movement
@@ -431,6 +436,7 @@ class GameClient:
             self.y,
             self.is_muted,
             mic_level,
+            self.show_player_names,
         )
 
     async def _start_audio(self) -> None:

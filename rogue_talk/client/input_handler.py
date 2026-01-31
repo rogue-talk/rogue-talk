@@ -42,3 +42,8 @@ def is_mute_key(key: Keystroke) -> bool:
 def is_quit_key(key: Keystroke) -> bool:
     """Check if key is the quit key."""
     return str(key).lower() == "q"
+
+
+def is_show_names_key(key: Keystroke) -> bool:
+    """Check if key is the show names toggle (Tab)."""
+    return key.name == "KEY_TAB"

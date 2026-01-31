@@ -90,6 +90,7 @@ class TerminalUI:
         player_y: int,
         is_muted: bool,
         mic_level: float = 0.0,
+        show_player_names: bool = False,
     ) -> None:
         """Render the game state to the terminal."""
         # Advance animation frame based on time (not render rate)
@@ -119,7 +120,14 @@ class TerminalUI:
                 lx = cam_x + vx
                 ly = cam_y + vy
                 char = self._get_cell_char(
-                    lx, ly, level, players, local_player_id, player_x, player_y
+                    lx,
+                    ly,
+                    level,
+                    players,
+                    local_player_id,
+                    player_x,
+                    player_y,
+                    show_player_names,
                 )
                 row += char
             output.append(row)
@@ -155,7 +163,7 @@ class TerminalUI:
 
         # Controls
         output.append("")
-        output.append("Controls: WASD/HJKL/Arrows=Move, M=Mute, Q=Quit")
+        output.append("Controls: WASD/HJKL/Arrows=Move, M=Mute, Tab=Names, Q=Quit")
 
         print("\n".join(output), end="", flush=True)
 
@@ -168,6 +176,7 @@ class TerminalUI:
         local_player_id: int,
         player_x: int,
         player_y: int,
+        show_player_names: bool = False,
     ) -> str:
         """Get the character to display at a cell with distance-based lighting."""
         # Calculate distance from player
@@ -183,6 +192,21 @@ class TerminalUI:
         # The first wall hit IS visible (ray reaches it), but nothing behind it
         if not self._has_line_of_sight(player_x, player_y, x, y, level):
             return " "
+
+        # Check if we should render a player name above them (other players only)
+        if show_player_names:
+            for p in players:
+                if p.player_id == local_player_id:
+                    continue
+                # Check if player is one row below this position
+                if p.y == y + 1:
+                    # Calculate name position (centered above player)
+                    name_start = p.x - len(p.name) // 2
+                    name_end = name_start + len(p.name)
+                    if name_start <= x < name_end:
+                        char_idx = x - name_start
+                        name_char = p.name[char_idx]
+                        return str(self.term.bold_yellow(name_char))
 
         # Draw local player at predicted position (not server state)
         if x == player_x and y == player_y:
