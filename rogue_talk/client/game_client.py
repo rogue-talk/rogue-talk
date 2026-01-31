@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import socket
 import struct
 import tempfile
@@ -629,6 +630,11 @@ class GameClient:
 
     async def _send_audio_frames(self) -> None:
         """Send audio frames from the queue to the server."""
+        _frame_count = 0
+        _bytes_sent = 0
+        _last_log_time = 0.0
+        _logger = logging.getLogger(__name__)
+
         while self.running:
             try:
                 if self._audio_queue is None:
@@ -644,11 +650,25 @@ class GameClient:
                         volume=1.0,
                         opus_data=opus_data,
                     )
+                    payload = serialize_audio_frame(frame)
                     await write_message(
                         self.writer,
                         MessageType.AUDIO_FRAME,
-                        serialize_audio_frame(frame),
+                        payload,
                     )
+                    # Track bandwidth
+                    _frame_count += 1
+                    _bytes_sent += len(payload) + 5  # +5 for message header
+                    now = time.time()
+                    if now - _last_log_time >= 5.0:
+                        kbps = (_bytes_sent * 8) / (now - _last_log_time) / 1000
+                        _logger.info(
+                            f"Audio: {_frame_count} frames, {kbps:.1f} kbps "
+                            f"(avg {_bytes_sent // max(_frame_count, 1)} bytes/frame)"
+                        )
+                        _frame_count = 0
+                        _bytes_sent = 0
+                        _last_log_time = now
             except asyncio.TimeoutError:
                 continue
 

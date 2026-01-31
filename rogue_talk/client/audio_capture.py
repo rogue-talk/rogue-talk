@@ -15,6 +15,10 @@ from ..common.constants import CHANNELS, FRAME_SIZE, SAMPLE_RATE
 class AudioCapture:
     """Captures audio from microphone and encodes to Opus."""
 
+    # VAD settings
+    VAD_THRESHOLD = 0.02  # Minimum level to consider as speech
+    VAD_HOLDOVER_FRAMES = 25  # Continue sending for 500ms after speech ends (25 * 20ms)
+
     def __init__(self, on_frame: Callable[[bytes, int], None]) -> None:
         """
         Args:
@@ -26,6 +30,7 @@ class AudioCapture:
         self.is_muted = False
         self._start_time_ms = 0
         self.last_level = 0.0
+        self._vad_holdover_count = 0  # Frames remaining in holdover period
 
     def start(self) -> None:
         """Start capturing audio."""
@@ -67,6 +72,17 @@ class AudioCapture:
         self.last_level = float(np.abs(pcm).max())
 
         if self.is_muted:
+            return
+
+        # Simple VAD with holdover to avoid cutting off speech
+        if self.last_level >= self.VAD_THRESHOLD:
+            # Speech detected - reset holdover
+            self._vad_holdover_count = self.VAD_HOLDOVER_FRAMES
+        elif self._vad_holdover_count > 0:
+            # In holdover period - continue sending
+            self._vad_holdover_count -= 1
+        else:
+            # Silence and holdover expired - skip frame
             return
 
         # Encode to Opus
