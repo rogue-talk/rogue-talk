@@ -11,14 +11,14 @@
     {
       "x": 34,
       "y": 5,
-      "target_x": 3,
+      "target_x": 2,
       "target_y": 9,
       "see_through": true
     },
     {
       "x": 2,
       "y": 9,
-      "target_x": 35,
+      "target_x": 34,
       "target_y": 5,
       "see_through": true
     }
