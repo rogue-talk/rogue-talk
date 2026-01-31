@@ -30,6 +30,13 @@ class TerminalUI:
         self.term = terminal
         self.anim_frame = 0
         self._last_anim_time = time.monotonic()
+        # Map caching - only recalculate when player moves
+        self._cached_map: list[list[str]] | None = None
+        self._cached_rows: list[str] | None = None  # Pre-joined row strings
+        self._cache_player_pos: tuple[int, int] | None = None
+        self._cache_level_id: int | None = None
+        self._cache_viewport_size: tuple[int, int] | None = None
+        self._cache_anim_frame: int | None = None
 
     def _get_viewport(self) -> Viewport:
         """Get viewport sized to current terminal dimensions."""
@@ -145,9 +152,11 @@ class TerminalUI:
         """Render the game state to the terminal."""
         # Advance animation frame based on time (not render rate)
         now = time.monotonic()
+        anim_changed = False
         if now - self._last_anim_time >= ANIM_INTERVAL:
             self.anim_frame += 1
             self._last_anim_time = now
+            anim_changed = True
 
         output: list[str] = []
 
@@ -162,27 +171,82 @@ class TerminalUI:
             player_x, player_y, level.width, level.height
         )
 
-        # Draw the visible portion of the level
+        # Check if cached map is still valid
+        viewport_size = (viewport.width, viewport.height)
+        cache_valid = (
+            self._cached_map is not None
+            and self._cache_player_pos == (player_x, player_y)
+            and self._cache_level_id == id(level)
+            and self._cache_viewport_size == viewport_size
+            and self._cache_anim_frame == self.anim_frame
+        )
+
+        # Rebuild cache if invalid
+        if not cache_valid:
+            self._cached_map = []
+            self._cached_rows = []
+            for vy in range(viewport.height):
+                row: list[str] = []
+                for vx in range(viewport.width):
+                    lx = cam_x + vx
+                    ly = cam_y + vy
+                    char = self._get_map_cell_char(
+                        lx,
+                        ly,
+                        level,
+                        player_x,
+                        player_y,
+                        other_levels or {},
+                    )
+                    row.append(char)
+                self._cached_map.append(row)
+                self._cached_rows.append("".join(row))
+            self._cache_player_pos = (player_x, player_y)
+            self._cache_level_id = id(level)
+            self._cache_viewport_size = viewport_size
+            self._cache_anim_frame = self.anim_frame
+
+        # Build display with players overlaid on cached map
+        cached_map = self._cached_map  # Local reference for mypy
+        cached_rows = self._cached_rows
+        assert cached_map is not None
+        assert cached_rows is not None
+
+        # Pre-compute player overlay positions (only check actual player locations)
+        player_overlays: dict[tuple[int, int], str] = {}
+        self._compute_player_overlays(
+            player_overlays,
+            cam_x,
+            cam_y,
+            viewport,
+            level,
+            players,
+            local_player_id,
+            player_x,
+            player_y,
+            show_player_names,
+            other_levels or {},
+            current_level,
+        )
+
+        # Group overlays by row for efficient application
+        overlays_by_row: dict[int, list[tuple[int, str]]] = {}
+        for (vx, vy), char in player_overlays.items():
+            if vy not in overlays_by_row:
+                overlays_by_row[vy] = []
+            overlays_by_row[vy].append((vx, char))
+
+        clear_eol = str(self.term.clear_eol)
         for vy in range(viewport.height):
-            row = ""
-            for vx in range(viewport.width):
-                # Convert viewport coordinates to level coordinates
-                lx = cam_x + vx
-                ly = cam_y + vy
-                char = self._get_cell_char(
-                    lx,
-                    ly,
-                    level,
-                    players,
-                    local_player_id,
-                    player_x,
-                    player_y,
-                    show_player_names,
-                    other_levels or {},
-                    current_level,
-                )
-                row += char
-            output.append(row + str(self.term.clear_eol))
+            if vy in overlays_by_row:
+                # This row has overlays - need to modify
+                row_chars = list(cached_map[vy])
+                for vx, char in overlays_by_row[vy]:
+                    row_chars[vx] = char
+                output.append("".join(row_chars) + clear_eol)
+            else:
+                # No overlays - use pre-joined cached row directly
+                output.append(cached_rows[vy] + clear_eol)
 
         # Status bar
         clear_eol = str(self.term.clear_eol)
@@ -225,20 +289,16 @@ class TerminalUI:
 
         print("\n".join(output), end="", flush=True)
 
-    def _get_cell_char(
+    def _get_map_cell_char(
         self,
         x: int,
         y: int,
         level: Level,
-        players: list[PlayerInfo],
-        local_player_id: int,
         player_x: int,
         player_y: int,
-        show_player_names: bool = False,
-        other_levels: dict[str, Level] | None = None,
-        current_level: str = "main",
+        other_levels: dict[str, Level],
     ) -> str:
-        """Get the character to display at a cell with distance-based lighting."""
+        """Get the map character at a cell (no players - cacheable)."""
         # Calculate distance from player
         dx = x - player_x
         dy = y - player_y
@@ -250,80 +310,178 @@ class TerminalUI:
 
         # Check for see-through portal view before normal LOS check
         portal_result = self._check_portal_view(
-            x, y, player_x, player_y, level, other_levels or {}
+            x, y, player_x, player_y, level, other_levels
         )
         if portal_result:
             portal_level, portal_x, portal_y, total_distance = portal_result
-
-            # Determine target level name for player filtering
-            # Find the door we went through to get the target level name
-            target_level_name = current_level  # default to same level
-            if level.doors:
-                for door in level.doors:
-                    if door.target_level and other_levels:
-                        if other_levels.get(door.target_level) is portal_level:
-                            target_level_name = door.target_level
-                            break
-
-            # Check for players at the mapped position (including self)
-            if portal_x == player_x and portal_y == player_y:
-                # Local player visible through portal
-                return str(self.term.bold_magenta("@"))
-            for p in players:
-                if p.x == portal_x and p.y == portal_y and p.level == target_level_name:
-                    # Other player visible through portal (on target level)
-                    return str(self.term.magenta("@"))
-
             return self._render_tile_with_portal_tint(
                 portal_level.get_tile(portal_x, portal_y), total_distance, portal_x
             )
 
         # Check line of sight - walls block light
-        # The first wall hit IS visible (ray reaches it), but nothing behind it
         if not self._has_line_of_sight(player_x, player_y, x, y, level):
             return " "
-
-        # Check if we should render a player name above them (other players only)
-        if show_player_names:
-            for p in players:
-                if p.player_id == local_player_id:
-                    continue
-                if p.level != current_level:
-                    continue  # Skip players on other levels
-                # Check if player is one row below this position
-                if p.y == y + 1:
-                    # Calculate name position (centered above player)
-                    name_start = p.x - len(p.name) // 2
-                    name_end = name_start + len(p.name)
-                    if name_start <= x < name_end:
-                        char_idx = x - name_start
-                        name_char = p.name[char_idx]
-                        return str(self.term.bold_yellow(name_char))
-
-        # Draw local player at predicted position (not server state)
-        if x == player_x and y == player_y:
-            return str(self.term.bold_green("@"))
-
-        # Check for other players at this position (only on current level)
-        for p in players:
-            if p.x == x and p.y == y and p.player_id != local_player_id:
-                if p.level != current_level:
-                    continue  # Skip players on other levels
-                # Other players affected by distance
-                if distance <= LIGHT_FULL_RADIUS:
-                    return str(self.term.bold_yellow("@"))
-                elif distance <= LIGHT_NORMAL_RADIUS:
-                    return str(self.term.yellow("@"))
-                elif distance <= LIGHT_DIM_RADIUS:
-                    return str(self.term.color(229)("@"))  # type: ignore
-                elif distance <= LIGHT_DARKER_RADIUS:
-                    return str(self.term.color(245)("@"))  # type: ignore
-                else:
-                    return str(self.term.color(240)("@"))  # type: ignore
 
         # Get tile from level and render with lighting
         tile_char = level.get_tile(x, y)
         return self._render_tile_with_lighting(tile_char, distance, x)
+
+    def _compute_player_overlays(
+        self,
+        overlays: dict[tuple[int, int], str],
+        cam_x: int,
+        cam_y: int,
+        viewport: Viewport,
+        level: Level,
+        players: list[PlayerInfo],
+        local_player_id: int,
+        player_x: int,
+        player_y: int,
+        show_player_names: bool,
+        other_levels: dict[str, Level],
+        current_level: str,
+    ) -> None:
+        """Compute player overlay characters at viewport positions (O(num_players))."""
+        # Add local player
+        vx = player_x - cam_x
+        vy = player_y - cam_y
+        if 0 <= vx < viewport.width and 0 <= vy < viewport.height:
+            overlays[(vx, vy)] = str(self.term.bold_green("@"))
+
+        # Add other players
+        for p in players:
+            if p.player_id == local_player_id:
+                continue
+            if p.level != current_level:
+                continue
+
+            # Check if in viewport
+            vx = p.x - cam_x
+            vy = p.y - cam_y
+            if not (0 <= vx < viewport.width and 0 <= vy < viewport.height):
+                continue
+
+            # Check distance and LOS
+            dx = p.x - player_x
+            dy = p.y - player_y
+            distance = math.sqrt(dx * dx + dy * dy)
+
+            if distance > LIGHT_FADING_RADIUS:
+                continue
+
+            if not self._has_line_of_sight(player_x, player_y, p.x, p.y, level):
+                continue
+
+            # Render with distance-based lighting
+            if distance <= LIGHT_FULL_RADIUS:
+                overlays[(vx, vy)] = str(self.term.bold_yellow("@"))
+            elif distance <= LIGHT_NORMAL_RADIUS:
+                overlays[(vx, vy)] = str(self.term.yellow("@"))
+            elif distance <= LIGHT_DIM_RADIUS:
+                overlays[(vx, vy)] = str(self.term.color(229)("@"))  # type: ignore
+            elif distance <= LIGHT_DARKER_RADIUS:
+                overlays[(vx, vy)] = str(self.term.color(245)("@"))  # type: ignore
+            else:
+                overlays[(vx, vy)] = str(self.term.color(240)("@"))  # type: ignore
+
+            # Add player name above if enabled
+            if show_player_names:
+                name_start = p.x - len(p.name) // 2
+                name_vy = vy - 1  # Row above player
+                if 0 <= name_vy < viewport.height:
+                    for i, char in enumerate(p.name):
+                        name_vx = (name_start + i) - cam_x
+                        if 0 <= name_vx < viewport.width:
+                            overlays[(name_vx, name_vy)] = str(
+                                self.term.bold_yellow(char)
+                            )
+
+        # Add players visible through portals (including self through same-level teleporters)
+        if level.doors:
+            for door in level.doors:
+                if not door.see_through:
+                    continue
+
+                # Determine target level (same level if target_level is None)
+                if door.target_level:
+                    target_level = other_levels.get(door.target_level)
+                    if not target_level:
+                        continue
+                    target_level_name = door.target_level
+                else:
+                    # Same-level teleporter
+                    target_level = level
+                    target_level_name = current_level
+
+                # Check if player can see the portal
+                door_dx = door.x - player_x
+                door_dy = door.y - player_y
+                door_dist = math.sqrt(door_dx * door_dx + door_dy * door_dy)
+                if door_dist > LIGHT_FADING_RADIUS:
+                    continue
+                if not self._has_line_of_sight(
+                    player_x, player_y, door.x, door.y, level
+                ):
+                    continue
+
+                # Check if local player visible through this portal (same-level teleporter)
+                if not door.target_level:
+                    offset_x = player_x - door.target_x
+                    offset_y = player_y - door.target_y
+                    apparent_x = door.x + offset_x
+                    apparent_y = door.y + offset_y
+
+                    # Verify ray from player to apparent position goes through portal
+                    # and maps back to player's actual position
+                    portal_check = self._check_portal_view(
+                        apparent_x, apparent_y, player_x, player_y, level, {}
+                    )
+                    if portal_check:
+                        _, mapped_x, mapped_y, total_dist = portal_check
+                        if mapped_x == player_x and mapped_y == player_y:
+                            vx = apparent_x - cam_x
+                            vy = apparent_y - cam_y
+                            if 0 <= vx < viewport.width and 0 <= vy < viewport.height:
+                                if total_dist <= LIGHT_FADING_RADIUS:
+                                    overlays[(vx, vy)] = str(
+                                        self.term.bold_magenta("@")
+                                    )
+
+                # Check other players on target level
+                for p in players:
+                    if p.level != target_level_name:
+                        continue
+                    # Skip self (handled above for same-level)
+                    if p.player_id == local_player_id:
+                        continue
+
+                    # Calculate where this player appears through the portal
+                    offset_x = p.x - door.target_x
+                    offset_y = p.y - door.target_y
+                    apparent_x = door.x + offset_x
+                    apparent_y = door.y + offset_y
+
+                    # Verify ray from player to apparent position goes through portal
+                    portal_check = self._check_portal_view(
+                        apparent_x, apparent_y, player_x, player_y, level, other_levels
+                    )
+                    if not portal_check:
+                        continue
+                    _, mapped_x, mapped_y, total_dist = portal_check
+                    if mapped_x != p.x or mapped_y != p.y:
+                        continue
+
+                    # Check viewport bounds
+                    vx = apparent_x - cam_x
+                    vy = apparent_y - cam_y
+                    if not (0 <= vx < viewport.width and 0 <= vy < viewport.height):
+                        continue
+
+                    if total_dist > LIGHT_FADING_RADIUS:
+                        continue
+
+                    # Render with magenta tint (portal view)
+                    overlays[(vx, vy)] = str(self.term.magenta("@"))
 
     def _get_color_fn(self, color_name: str) -> str:
         """Get color escape sequence for a color name or 256-color code."""

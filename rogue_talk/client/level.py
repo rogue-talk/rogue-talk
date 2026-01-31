@@ -28,6 +28,7 @@ class Level:
     height: int
     tiles: list[list[str]]
     doors: list[DoorInfo] | None = None
+    _see_through_door_cache: dict[tuple[int, int], DoorInfo] | None = None
 
     @classmethod
     def from_bytes(cls, data: bytes) -> Level:
@@ -57,10 +58,11 @@ class Level:
         return tile_defs.is_walkable(self.tiles[y][x])
 
     def get_see_through_door_at(self, x: int, y: int) -> DoorInfo | None:
-        """Get a see-through door at the given position, or None."""
-        if not self.doors:
-            return None
-        for door in self.doors:
-            if door.x == x and door.y == y and door.see_through:
-                return door
-        return None
+        """Get a see-through door at the given position, or None (O(1) cached)."""
+        if self._see_through_door_cache is None:
+            self._see_through_door_cache = {}
+            if self.doors:
+                for door in self.doors:
+                    if door.see_through:
+                        self._see_through_door_cache[(door.x, door.y)] = door
+        return self._see_through_door_cache.get((x, y))
