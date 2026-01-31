@@ -4,7 +4,9 @@ from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-import opuslib
+import opuslib_next as opuslib
+import opuslib_next.api.ctl as opus_ctl
+import opuslib_next.api.encoder as opus_encoder_api
 
 from ..common.constants import CHANNELS, FRAME_SIZE, OPUS_BITRATE, SAMPLE_RATE
 
@@ -17,11 +19,18 @@ class OpusEncoder:
         self.encoder.bitrate = OPUS_BITRATE
 
         # Enable FEC for packet loss resilience (embeds redundant data for previous frame)
-        self.encoder.ctl(opuslib.api.ctl.set_inband_fec, 1)
-        self.encoder.ctl(opuslib.api.ctl.set_packet_loss_perc, 10)  # Expect 10% loss
+        # Note: Using direct CTL API because property setters have a bug
+        opus_encoder_api.encoder_ctl(
+            self.encoder.encoder_state, opus_ctl.set_inband_fec, 1
+        )
+        opus_encoder_api.encoder_ctl(
+            self.encoder.encoder_state,
+            opus_ctl.set_packet_loss_perc,
+            10,  # Expect 10%
+        )
 
         # Enable DTX to save bandwidth during silence
-        self.encoder.ctl(opuslib.api.ctl.set_dtx, 1)
+        opus_encoder_api.encoder_ctl(self.encoder.encoder_state, opus_ctl.set_dtx, 1)
 
     def encode(self, pcm_data: npt.NDArray[np.float32]) -> bytes:
         """Encode PCM float32 data to Opus."""
@@ -37,12 +46,8 @@ class OpusDecoder:
     def __init__(self) -> None:
         self.decoder = opuslib.Decoder(SAMPLE_RATE, CHANNELS)
 
-    def decode(self, opus_data: bytes | None) -> npt.NDArray[np.float32]:
-        """Decode Opus data to PCM float32.
-
-        If opus_data is None, uses Opus PLC (Packet Loss Concealment) to
-        generate smooth audio based on the previous frame.
-        """
+    def decode(self, opus_data: bytes) -> npt.NDArray[np.float32]:
+        """Decode Opus data to PCM float32."""
         pcm_bytes: bytes = self.decoder.decode(opus_data, FRAME_SIZE)
         pcm_int16 = np.frombuffer(pcm_bytes, dtype=np.int16)
         return pcm_int16.astype(np.float32) / 32767.0

@@ -27,6 +27,18 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           python = pkgs.python312;
+          opuslib_next = python.pkgs.buildPythonPackage {
+            pname = "opuslib_next";
+            version = "1.1.5";
+            src = pkgs.fetchPypi {
+              pname = "opuslib_next";
+              version = "1.1.5";
+              sha256 = "6aec1015f25f799794d217601c74ea0fae8fd65d752578cb163fd2338ed075ce";
+            };
+            pyproject = true;
+            build-system = [ python.pkgs.poetry-core ];
+            doCheck = false;
+          };
           rogue-talk = python.pkgs.buildPythonApplication {
             pname = "rogue-talk";
             version = "0.1.0";
@@ -39,7 +51,7 @@
               blessed
               sounddevice
               soundfile
-              opuslib
+              opuslib_next
               numpy
               cryptography
             ];
@@ -70,6 +82,18 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           python = pkgs.python312;
+          opuslib_next = python.pkgs.buildPythonPackage {
+            pname = "opuslib_next";
+            version = "1.1.5";
+            src = pkgs.fetchPypi {
+              pname = "opuslib_next";
+              version = "1.1.5";
+              sha256 = "6aec1015f25f799794d217601c74ea0fae8fd65d752578cb163fd2338ed075ce";
+            };
+            pyproject = true;
+            build-system = [ python.pkgs.poetry-core ];
+            doCheck = false;
+          };
         in
         {
           default = pkgs.mkShell {
@@ -78,7 +102,7 @@
                 ps.blessed
                 ps.sounddevice
                 ps.soundfile
-                ps.opuslib
+                opuslib_next
                 ps.numpy
                 ps.cryptography
                 ps.mypy

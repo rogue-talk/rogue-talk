@@ -24,7 +24,6 @@ class AudioPlayback:
     def __init__(self) -> None:
         self.jitter_buffers: dict[int, JitterBuffer] = defaultdict(JitterBuffer)
         self.decoders: dict[int, OpusDecoder] = {}
-        self.last_volumes: dict[int, float] = {}  # Track last known volume for PLC
         self.mixer = AudioMixer()
         self.stream: sd.OutputStream | None = None
         self.tile_sound_player: TileSoundPlayer | None = None
@@ -62,7 +61,6 @@ class AudioPlayback:
         """Clean up resources for a player who left."""
         self.jitter_buffers.pop(player_id, None)
         self.decoders.pop(player_id, None)
-        self.last_volumes.pop(player_id, None)
         self.mixer.remove_player(player_id)
 
     def _get_decoder(self, player_id: int) -> OpusDecoder:
@@ -82,19 +80,13 @@ class AudioPlayback:
         # Process each player's jitter buffer
         for player_id, jitter_buffer in list(self.jitter_buffers.items()):
             packet = jitter_buffer.get_next_packet()
-            decoder = self._get_decoder(player_id)
-
             if packet is not None:
                 # Decode Opus to PCM
+                decoder = self._get_decoder(player_id)
                 pcm = decoder.decode(packet.opus_data)
-                self.last_volumes[player_id] = packet.volume
+
+                # Add to mixer with volume
                 self.mixer.add_frame(player_id, pcm, packet.volume)
-            elif jitter_buffer.has_started():
-                # Buffer underrun after playback started - use PLC
-                # Opus decoder generates concealment audio when passed None
-                pcm = decoder.decode(None)
-                volume = self.last_volumes.get(player_id, 1.0)
-                self.mixer.add_frame(player_id, pcm, volume)
 
         # Mix all voice streams
         mixed = self.mixer.mix()
