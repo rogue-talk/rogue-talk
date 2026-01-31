@@ -38,6 +38,7 @@
             dependencies = with python.pkgs; [
               blessed
               sounddevice
+              soundfile
               opuslib
               numpy
               cryptography
@@ -48,6 +49,7 @@
                 pkgs.lib.makeLibraryPath [
                   pkgs.libopus
                   pkgs.portaudio
+                  pkgs.libsndfile
                 ]
               }"
             ];
@@ -75,6 +77,7 @@
               (python.withPackages (ps: [
                 ps.blessed
                 ps.sounddevice
+                ps.soundfile
                 ps.opuslib
                 ps.numpy
                 ps.cryptography
@@ -82,10 +85,11 @@
               ]))
               pkgs.libopus
               pkgs.portaudio
+              pkgs.libsndfile
             ];
 
             shellHook = ''
-              export LD_LIBRARY_PATH="${pkgs.libopus}/lib:${pkgs.portaudio}/lib:$LD_LIBRARY_PATH"
+              export LD_LIBRARY_PATH="${pkgs.libopus}/lib:${pkgs.portaudio}/lib:${pkgs.libsndfile}/lib:$LD_LIBRARY_PATH"
             '';
           };
         }

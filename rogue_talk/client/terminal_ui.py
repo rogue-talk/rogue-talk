@@ -81,6 +81,50 @@ class TerminalUI:
 
         return True
 
+    def has_line_of_sound(
+        self, x1: int, y1: int, x2: int, y2: int, level: Level
+    ) -> bool:
+        """Check if there's a clear path for sound between two points.
+
+        Uses Bresenham's line algorithm to trace the path.
+        Returns True if no sound-blocking tiles are in the way.
+        Uses the tile's blocks_sound property instead of hardcoded checks.
+        """
+        # Same position - always audible
+        if x1 == x2 and y1 == y2:
+            return True
+
+        dx = abs(x2 - x1)
+        dy = abs(y2 - y1)
+        sx = 1 if x1 < x2 else -1
+        sy = 1 if y1 < y2 else -1
+        err = dx - dy
+
+        x, y = x1, y1
+
+        while True:
+            # Check if we've reached the target (don't check the target itself)
+            if x == x2 and y == y2:
+                return True
+
+            # Check if current tile blocks sound (skip the starting position)
+            if x != x1 or y != y1:
+                tile_char = level.get_tile(x, y)
+                tile_def = tiles.get_tile(tile_char)
+                if tile_def.blocks_sound:
+                    return False
+
+            # Move to next cell
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x += sx
+            if e2 < dx:
+                err += dx
+                y += sy
+
+        return True
+
     def render(
         self,
         level: Level,

@@ -37,12 +37,14 @@ from ..common.protocol import (
     serialize_position_update,
     write_message,
 )
-from .identity import Identity, load_or_create_identity
+from ..audio.sound_loader import SoundCache
 from ..common import tiles as tile_defs
+from .identity import Identity, load_or_create_identity
 from .input_handler import get_movement, is_mute_key, is_quit_key, is_show_names_key
 from .level import Level
 from .level_pack import extract_level_pack
 from .terminal_ui import TerminalUI
+from .tile_sound_player import TileSoundPlayer
 
 if TYPE_CHECKING:
     from .audio_capture import AudioCapture
@@ -80,6 +82,9 @@ class GameClient:
         self._pending_moves: dict[int, tuple[int, int]] = {}  # seq -> (dx, dy)
         # Temporary directory for level pack extraction
         self._temp_dir: tempfile.TemporaryDirectory[str] | None = None
+        # Tile sound system
+        self._sound_cache: SoundCache = SoundCache()
+        self._tile_sound_player: TileSoundPlayer = TileSoundPlayer(self._sound_cache)
 
     async def connect(self) -> bool:
         """Connect to the server and complete handshake."""
@@ -124,6 +129,9 @@ class GameClient:
         # Load custom tiles if present
         if level_pack.tiles_path:
             tile_defs.reload_tiles(level_pack.tiles_path)
+
+        # Set up sound assets directory
+        self._sound_cache.set_assets_dir(level_pack.assets_dir)
 
         # Wait for AUTH_CHALLENGE
         msg_type, payload = await read_message(self.reader)
@@ -347,6 +355,10 @@ class GameClient:
             # Reset to default tiles
             tile_defs.reload_tiles()
 
+        # Update sound assets directory for new level pack
+        self._sound_cache.set_assets_dir(level_pack.assets_dir)
+        self._tile_sound_player.clear()
+
         # Load the new level from the pack
         with open(level_pack.level_path, encoding="utf-8") as f:
             level_content = f.read()
@@ -410,6 +422,8 @@ class GameClient:
                 self.y = new_y
                 # Queue position update (non-blocking)
                 self._position_queue.put_nowait((seq, new_x, new_y))
+                # Play walking sound for the new tile
+                self._tile_sound_player.on_player_move(new_x, new_y, self.level)
 
     async def _toggle_mute(self) -> None:
         """Toggle mute state."""
@@ -428,6 +442,12 @@ class GameClient:
         """Render the current game state."""
         if not self.level:
             return
+
+        # Update ambient tile sounds based on nearby tiles
+        self._tile_sound_player.update_nearby_sounds(
+            self.x, self.y, self.level, self.ui.has_line_of_sound
+        )
+
         mic_level = self.audio_capture.last_level if self.audio_capture else 0.0
         self.ui.render(
             self.level,
@@ -447,6 +467,7 @@ class GameClient:
             from .audio_playback import AudioPlayback
 
             self.audio_playback = AudioPlayback()
+            self.audio_playback.tile_sound_player = self._tile_sound_player
             self.audio_playback.start()
 
             self.audio_capture = AudioCapture(self._on_audio_frame)

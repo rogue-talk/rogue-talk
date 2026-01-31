@@ -1,7 +1,9 @@
 """Audio playback with decoding and mixing."""
 
+from __future__ import annotations
+
 from collections import defaultdict
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
@@ -12,6 +14,9 @@ from ..audio.opus_codec import OpusDecoder
 from ..common.constants import CHANNELS, FRAME_SIZE, SAMPLE_RATE
 from .jitter_buffer import AudioPacket, JitterBuffer
 
+if TYPE_CHECKING:
+    from .tile_sound_player import TileSoundPlayer
+
 
 class AudioPlayback:
     """Manages receiving, decoding, and playing back audio from multiple players."""
@@ -21,6 +26,7 @@ class AudioPlayback:
         self.decoders: dict[int, OpusDecoder] = {}
         self.mixer = AudioMixer()
         self.stream: sd.OutputStream | None = None
+        self.tile_sound_player: TileSoundPlayer | None = None
 
     def start(self) -> None:
         """Start audio output stream."""
@@ -82,8 +88,15 @@ class AudioPlayback:
                 # Add to mixer with volume
                 self.mixer.add_frame(player_id, pcm, packet.volume)
 
-        # Mix all streams
+        # Mix all voice streams
         mixed = self.mixer.mix()
+
+        # Mix in tile sounds if available
+        if self.tile_sound_player:
+            tile_audio = self.tile_sound_player.get_mixed_frame()
+            mixed = mixed + tile_audio
+            # Soft clip to prevent harsh distortion
+            mixed = np.tanh(mixed)
 
         # Write to output (reshape for sounddevice)
         outdata[:] = mixed.reshape(-1, 1)
