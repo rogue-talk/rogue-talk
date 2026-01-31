@@ -343,6 +343,10 @@ class GameClient:
         if not self.writer or not self.reader:
             return
 
+        # Clear pending moves immediately to prevent rubber banding
+        # (POSITION_ACK may arrive while we're loading the new level)
+        self._pending_moves.clear()
+
         # Request the new level pack
         await write_message(
             self.writer,
