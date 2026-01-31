@@ -1,0 +1,26 @@
+{
+  "doors": [
+    {
+      "x": 47,
+      "y": 9,
+      "target_level": "main",
+      "target_x": 7,
+      "target_y": 4,
+      "see_through": true
+    },
+    {
+      "x": 34,
+      "y": 5,
+      "target_x": 3,
+      "target_y": 9,
+      "see_through": true
+    },
+    {
+      "x": 2,
+      "y": 9,
+      "target_x": 35,
+      "target_y": 5,
+      "see_through": true
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "tiles": {
+    "#": {
+      "name": "cave_wall",
+      "color": "cyan",
+      "walkable": false,
+      "blocks_sight": true,
+      "blocks_sound": true
+    },
+    ".": {
+      "name": "cave_floor",
+      "color": "white",
+      "walkable": true,
+      "blocks_sight": false,
+      "blocks_sound": false
+    },
+    "^": {
+      "name": "lava",
+      "color": "bold_red",
+      "walkable": false,
+      "animation_colors": ["196", "124", "196", "124"],
+      "blocks_sight": false,
+      "blocks_sound": false
+    },
+    ">": {
+      "name": "exit_door",
+      "color": "bold_green",
+      "walkable": true,
+      "blocks_sight": false,
+      "blocks_sound": false,
+      "is_door": true
+    },
+    "T": {
+      "name": "teleporter",
+      "color": "bold_magenta",
+      "walkable": true,
+      "blocks_sight": false,
+      "blocks_sound": false,
+      "is_door": true
+    },
+    " ": {
+      "name": "void",
+      "color": "black",
+      "walkable": false,
+      "blocks_sight": true,
+      "blocks_sound": true
+    }
+  },
+  "default": {
+    "symbol": "?",
+    "color": "magenta",
+    "walkable": false
+  }
+}

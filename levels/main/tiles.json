@@ -1,0 +1,132 @@
+{
+  "tiles": {
+    "#": {
+      "name": "wall",
+      "color": "white",
+      "walkable": false,
+      "walking_sound": null,
+      "nearby_sound": null,
+      "animation_colors": null,
+      "blocks_sight": true,
+      "blocks_sound": true
+    },
+    "+": {
+      "name": "door",
+      "color": "yellow",
+      "walkable": true,
+      "walking_sound": "door_walking.ogg",
+      "nearby_sound": null,
+      "animation_colors": null,
+      "blocks_sight": false,
+      "blocks_sound": false
+    },
+    ".": {
+      "name": "floor",
+      "color": "white",
+      "walkable": true,
+      "walking_sound": "floor_walking.ogg",
+      "nearby_sound": null,
+      "animation_colors": null,
+      "blocks_sight": false,
+      "blocks_sound": false
+    },
+    ",": {
+      "name": "grass",
+	  "render_char": ".",
+      "color": "green",
+      "walkable": true,
+      "walking_sound": "grass_walking.ogg",
+      "nearby_sound": null,
+      "animation_colors": null,
+      "blocks_sight": false,
+      "blocks_sound": false
+    },
+    ":": {
+      "name": "gravel",
+      "color": "white",
+      "walkable": true,
+      "walking_sound": "gravel_walking.ogg",
+      "nearby_sound": null,
+      "animation_colors": null,
+      "blocks_sight": false,
+      "blocks_sound": false
+    },
+    "_": {
+      "name": "sand",
+      "color": "yellow",
+	  "render_char": ".",
+      "walkable": true,
+      "walking_sound": "sand_walking.ogg",
+      "nearby_sound": null,
+      "animation_colors": null,
+      "blocks_sight": false,
+      "blocks_sound": false
+    },
+    "~": {
+      "name": "water",
+      "color": "bold_blue",
+      "walkable": false,
+      "walking_sound": "water_walking.ogg",
+      "nearby_sound": "water_ambient.ogg",
+      "animation_colors": ["blue", "cyan", "bold_blue", "bold_cyan"],
+      "blocks_sight": false,
+      "blocks_sound": false
+    },
+    "^": {
+      "name": "lava",
+      "color": "bold_red",
+      "walkable": false,
+      "walking_sound": null,
+      "nearby_sound": "lava_ambient.ogg",
+      "animation_colors": ["196", "124", "196", "124"],
+      "blocks_sight": false,
+      "blocks_sound": false
+    },
+    "*": {
+      "name": "crystal",
+      "color": "bold_yellow",
+      "walkable": false,
+      "walking_sound": null,
+      "nearby_sound": "crystal_ambient.ogg",
+      "animation_colors": null,
+      "blocks_sight": false,
+      "blocks_sound": false
+    },
+    "%": {
+      "name": "bush",
+      "color": "green",
+      "walkable": false,
+      "walking_sound": null,
+      "nearby_sound": null,
+      "animation_colors": null,
+      "blocks_sight": true,
+      "blocks_sound": false
+    },
+    " ": {
+      "name": "void",
+      "color": "black",
+      "walkable": false,
+      "walking_sound": null,
+      "nearby_sound": null,
+      "animation_colors": null,
+      "blocks_sight": true,
+      "blocks_sound": true
+    },
+    ">": {
+      "name": "cave_entrance",
+      "color": "bold_cyan",
+      "walkable": true,
+      "walking_sound": "cave_entrance_walking.ogg",
+      "nearby_sound": null,
+      "animation_colors": null,
+      "blocks_sight": false,
+      "blocks_sound": false,
+      "is_door": true
+    }
+  },
+  "default": {
+    "symbol": "?",
+    "color": "magenta",
+    "walkable": false
+  }
+}

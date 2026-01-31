@@ -67,14 +67,15 @@ class GameServer:
         self._lock = asyncio.Lock()
 
     def _load_level_packs(self) -> None:
-        """Load all .tar level packs from the levels directory."""
+        """Load all level packs from subdirectories in the levels directory."""
         if not self.levels_dir.exists():
             raise FileNotFoundError(f"Levels directory not found: {self.levels_dir}")
 
-        for tar_path in self.levels_dir.glob("*.tar"):
-            name = tar_path.stem  # filename without .tar extension
-            with open(tar_path, "rb") as f:
-                self.level_packs[name] = f.read()
+        for folder_path in self.levels_dir.iterdir():
+            if not folder_path.is_dir():
+                continue
+            name = folder_path.name
+            self.level_packs[name] = self._create_tarball_from_folder(folder_path)
 
             # Parse the level and its tiles
             level, tiles = self._parse_level_pack(name)
@@ -88,8 +89,18 @@ class GameServer:
 
         if "main" not in self.level_packs:
             raise FileNotFoundError(
-                f"Required level pack 'main.tar' not found in {self.levels_dir}"
+                f"Required level folder 'main/' not found in {self.levels_dir}"
             )
+
+    def _create_tarball_from_folder(self, folder_path: Path) -> bytes:
+        """Create a tarball in memory from a level folder."""
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w") as tar:
+            for file_path in folder_path.rglob("*"):
+                if file_path.is_file():
+                    arcname = file_path.relative_to(folder_path)
+                    tar.add(file_path, arcname=str(arcname))
+        return buffer.getvalue()
 
     def _parse_level_pack(
         self, name: str

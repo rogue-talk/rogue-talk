@@ -1,0 +1,12 @@
+{
+  "doors": [
+    {
+      "x": 7,
+      "y": 4,
+      "target_level": "cave",
+      "target_x": 47,
+      "target_y": 9,
+      "see_through": true
+    }
+  ]
+}
