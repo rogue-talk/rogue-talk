@@ -63,6 +63,7 @@ class GameClient:
         self.room_width: int = 0
         self.room_height: int = 0
         self.level: Level | None = None
+        self.current_level: str = "main"
         self.is_muted: bool = False
         self.show_player_names: bool = False
         self.players: list[PlayerInfo] = []
@@ -155,6 +156,7 @@ class GameClient:
             level_name,
         ) = deserialize_server_hello(payload)
         self.level = Level.from_bytes(level_data)
+        self.current_level = level_name
 
         # Now request the correct level pack for doors and tiles
         await write_message(
@@ -398,6 +400,7 @@ class GameClient:
         self.level = Level(width=width, height=height, tiles=tiles)
         self.room_width = width
         self.room_height = height
+        self.current_level = target_level
 
         # Update position to spawn point (server will also send POSITION_ACK)
         self.x = spawn_x
@@ -553,6 +556,7 @@ class GameClient:
             mic_level,
             self.show_player_names,
             self.other_levels,
+            self.current_level,
         )
 
     async def _start_audio(self) -> None:

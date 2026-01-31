@@ -136,6 +136,7 @@ class TerminalUI:
         mic_level: float = 0.0,
         show_player_names: bool = False,
         other_levels: dict[str, Level] | None = None,
+        current_level: str = "main",
     ) -> None:
         """Render the game state to the terminal."""
         # Advance animation frame based on time (not render rate)
@@ -174,6 +175,7 @@ class TerminalUI:
                     player_y,
                     show_player_names,
                     other_levels or {},
+                    current_level,
                 )
                 row += char
             output.append(row + str(self.term.clear_eol))
@@ -230,6 +232,7 @@ class TerminalUI:
         player_y: int,
         show_player_names: bool = False,
         other_levels: dict[str, Level] | None = None,
+        current_level: str = "main",
     ) -> str:
         """Get the character to display at a cell with distance-based lighting."""
         # Calculate distance from player
@@ -247,6 +250,26 @@ class TerminalUI:
         )
         if portal_result:
             portal_level, portal_x, portal_y, total_distance = portal_result
+
+            # Determine target level name for player filtering
+            # Find the door we went through to get the target level name
+            target_level_name = current_level  # default to same level
+            if level.doors:
+                for door in level.doors:
+                    if door.target_level and other_levels:
+                        if other_levels.get(door.target_level) is portal_level:
+                            target_level_name = door.target_level
+                            break
+
+            # Check for players at the mapped position (including self)
+            if portal_x == player_x and portal_y == player_y:
+                # Local player visible through portal
+                return str(self.term.bold_magenta("@"))
+            for p in players:
+                if p.x == portal_x and p.y == portal_y and p.level == target_level_name:
+                    # Other player visible through portal (on target level)
+                    return str(self.term.magenta("@"))
+
             return self._render_tile_with_portal_tint(
                 portal_level.get_tile(portal_x, portal_y), total_distance, portal_x
             )
@@ -261,6 +284,8 @@ class TerminalUI:
             for p in players:
                 if p.player_id == local_player_id:
                     continue
+                if p.level != current_level:
+                    continue  # Skip players on other levels
                 # Check if player is one row below this position
                 if p.y == y + 1:
                     # Calculate name position (centered above player)
@@ -275,9 +300,11 @@ class TerminalUI:
         if x == player_x and y == player_y:
             return str(self.term.bold_green("@"))
 
-        # Check for other players at this position
+        # Check for other players at this position (only on current level)
         for p in players:
             if p.x == x and p.y == y and p.player_id != local_player_id:
+                if p.level != current_level:
+                    continue  # Skip players on other levels
                 # Other players affected by distance
                 if distance <= LIGHT_FULL_RADIUS:
                     return str(self.term.bold_yellow("@"))

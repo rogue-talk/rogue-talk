@@ -546,7 +546,7 @@ class GameServer:
     async def _send_world_state(self, player: Player) -> None:
         """Send current world state to a specific player."""
         players_info = [
-            PlayerInfo(p.id, p.x, p.y, p.is_muted, p.name)
+            PlayerInfo(p.id, p.x, p.y, p.is_muted, p.name, p.current_level)
             for p in self.players.values()
         ]
         await write_message(
@@ -558,7 +558,7 @@ class GameServer:
     async def _broadcast_world_state(self) -> None:
         """Broadcast world state to all players."""
         players_info = [
-            PlayerInfo(p.id, p.x, p.y, p.is_muted, p.name)
+            PlayerInfo(p.id, p.x, p.y, p.is_muted, p.name, p.current_level)
             for p in self.players.values()
         ]
         payload = serialize_world_state(players_info)
