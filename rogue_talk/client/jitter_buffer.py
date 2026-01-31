@@ -14,8 +14,9 @@ class AudioPacket:
 class JitterBuffer:
     """Buffers audio packets to smooth out network jitter."""
 
-    def __init__(self, min_packets: int = 3):
+    def __init__(self, min_packets: int = 3, max_packets: int = 10):
         self.min_packets = min_packets
+        self.max_packets = max_packets  # ~200ms at 20ms per frame
         self.packets: collections.deque[AudioPacket] = collections.deque()
         self.playback_started = False
 
@@ -29,6 +30,10 @@ class JitterBuffer:
                 if packet.timestamp_ms < p.timestamp_ms:
                     self.packets.insert(i, packet)
                     break
+
+        # Drop oldest packets if buffer is too full (prevents latency growth)
+        while len(self.packets) > self.max_packets:
+            self.packets.popleft()
 
     def get_next_packet(self) -> AudioPacket | None:
         """Get next packet for playback, or None if not ready."""
