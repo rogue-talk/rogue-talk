@@ -263,6 +263,7 @@ class AuthResult(enum.IntEnum):
     KEY_MISMATCH = 2  # Key registered with different name
     INVALID_SIGNATURE = 3
     INVALID_NAME = 4
+    ALREADY_CONNECTED = 5  # Player with this key is already connected
 
 
 # AUTH_RESULT: result code (1 byte)

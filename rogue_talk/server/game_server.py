@@ -277,6 +277,17 @@ class GameServer:
                     )
                     return
 
+            # Check if player is already connected
+            async with self._lock:
+                for p in self.players.values():
+                    if p.public_key == public_key:
+                        await write_message(
+                            writer,
+                            MessageType.AUTH_RESULT,
+                            serialize_auth_result(AuthResult.ALREADY_CONNECTED),
+                        )
+                        return
+
             # Auth successful
             await write_message(
                 writer,

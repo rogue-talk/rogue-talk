@@ -156,6 +156,7 @@ class GameClient:
                 AuthResult.KEY_MISMATCH: "Your key is registered with a different name",
                 AuthResult.INVALID_SIGNATURE: "Authentication failed (invalid signature)",
                 AuthResult.INVALID_NAME: "Invalid name",
+                AuthResult.ALREADY_CONNECTED: "You are already connected to this server",
             }
             print(
                 f"Authentication failed: {error_messages.get(auth_result, 'Unknown error')}"
