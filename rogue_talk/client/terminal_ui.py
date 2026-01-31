@@ -69,6 +69,10 @@ class TerminalUI:
                 tile = level.get_tile(x, y)
                 if tile in LIGHT_BLOCKING_TILES:
                     return False
+                # See-through portals also block normal line-of-sight
+                # (you can see through them via portal view, but not past them in current level)
+                if level.get_see_through_door_at(x, y):
+                    return False
 
             # Move to next cell
             e2 = 2 * err
