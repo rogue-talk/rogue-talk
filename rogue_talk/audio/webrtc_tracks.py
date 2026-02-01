@@ -30,13 +30,13 @@ except ImportError:
 
 
 class AudioCaptureTrack(MediaStreamTrack):
-    """Custom audio track that captures from microphone via sounddevice."""
+    """Custom audio track that captures from microphone."""
 
     kind = "audio"
 
     def __init__(self) -> None:
         super().__init__()
-        self._queue: asyncio.Queue[npt.NDArray[np.float32]] = asyncio.Queue(maxsize=50)
+        self._queue: asyncio.Queue[npt.NDArray[np.float32]] = asyncio.Queue(maxsize=10)
         self._start_time: float | None = None
         self._timestamp = 0
         self._sample_rate = SAMPLE_RATE
@@ -96,8 +96,8 @@ class AudioPlaybackTrack:
 
     def __init__(self, source_player_id: int = 0) -> None:
         self.source_player_id = source_player_id
-        # Use thread-safe queue since sounddevice callback runs in separate thread
-        self._queue: queue.Queue[npt.NDArray[np.float32]] = queue.Queue(maxsize=50)
+        # Use thread-safe queue since playback runs in separate thread
+        self._queue: queue.Queue[npt.NDArray[np.float32]] = queue.Queue(maxsize=10)
         self._running = False
         self._task: asyncio.Task[None] | None = None
         self._track: MediaStreamTrack | None = None
@@ -133,11 +133,47 @@ class AudioPlaybackTrack:
         if self._track is None:
             return
 
+        frame_count = 0
         while self._running:
             try:
                 frame = await self._track.recv()
                 if hasattr(frame, "to_ndarray"):
+                    frame_count += 1
+                    # Log frame properties for debugging
+                    if frame_count == 1:
+                        sample_rate = getattr(frame, "sample_rate", "?")
+                        samples = getattr(frame, "samples", "?")
+                        fmt = getattr(frame, "format", None)
+                        fmt_name = fmt.name if fmt else "?"
+                        layout = getattr(frame, "layout", None)
+                        layout_name = layout.name if layout else "?"
+                        logger.debug(
+                            f"AudioPlaybackTrack first frame: "
+                            f"sample_rate={sample_rate}, "
+                            f"samples={samples}, "
+                            f"format={fmt_name}, "
+                            f"layout={layout_name}"
+                        )
+
                     pcm_data = frame.to_ndarray()
+
+                    if frame_count == 1:
+                        logger.debug(
+                            f"AudioPlaybackTrack ndarray: "
+                            f"shape={pcm_data.shape}, dtype={pcm_data.dtype}"
+                        )
+
+                    # Handle multi-channel audio - extract mono
+                    if pcm_data.ndim == 2:
+                        if pcm_data.shape[0] == 1:
+                            # Packed interleaved stereo: shape (1, samples*channels)
+                            # Deinterleave by taking every other sample (left channel)
+                            pcm_data = pcm_data[0, ::2]
+                        else:
+                            # Planar format: shape (channels, samples)
+                            pcm_data = pcm_data[0]  # Take first channel
+                    else:
+                        pcm_data = pcm_data.flatten()
 
                     # Convert to float32 and normalize
                     if pcm_data.dtype == np.int16:
@@ -146,15 +182,6 @@ class AudioPlaybackTrack:
                         pcm_float = pcm_data.astype(np.float32) / 2147483648.0
                     else:
                         pcm_float = pcm_data.astype(np.float32)
-
-                    pcm_float = pcm_float.flatten()
-
-                    # Handle interleaved stereo - take left channel
-                    layout_name = getattr(
-                        getattr(frame, "layout", None), "name", "mono"
-                    )
-                    if layout_name == "stereo" and len(pcm_float) > 0:
-                        pcm_float = pcm_float[::2]
 
                     try:
                         self._queue.put_nowait(pcm_float * self._volume)
@@ -180,7 +207,7 @@ class ServerAudioRelay:
     def __init__(self, player_id: int) -> None:
         self.player_id = player_id
         self._incoming_queue: asyncio.Queue[npt.NDArray[np.float32]] = asyncio.Queue(
-            maxsize=50
+            maxsize=10
         )
         self._track: MediaStreamTrack | None = None
         self._running = False
@@ -218,6 +245,18 @@ class ServerAudioRelay:
                 if hasattr(frame, "to_ndarray"):
                     pcm_data = frame.to_ndarray()
 
+                    # Handle multi-channel audio - extract mono
+                    if pcm_data.ndim == 2:
+                        if pcm_data.shape[0] == 1:
+                            # Packed interleaved stereo: shape (1, samples*channels)
+                            # Deinterleave by taking every other sample (left channel)
+                            pcm_data = pcm_data[0, ::2]
+                        else:
+                            # Planar format: shape (channels, samples)
+                            pcm_data = pcm_data[0]  # Take first channel
+                    else:
+                        pcm_data = pcm_data.flatten()
+
                     # Convert to float32 and normalize
                     if pcm_data.dtype == np.int16:
                         pcm_float = pcm_data.astype(np.float32) / 32768.0
@@ -225,18 +264,6 @@ class ServerAudioRelay:
                         pcm_float = pcm_data.astype(np.float32) / 2147483648.0
                     else:
                         pcm_float = pcm_data.astype(np.float32)
-
-                    # Flatten to 1D first
-                    pcm_float = pcm_float.flatten()
-
-                    # Check if this is interleaved stereo (layout=stereo but data is flat)
-                    # In that case, samples are [L0, R0, L1, R1, ...] - take left channel
-                    layout_name = getattr(
-                        getattr(frame, "layout", None), "name", "mono"
-                    )
-                    if layout_name == "stereo" and len(pcm_float) > 0:
-                        # Take every other sample (left channel only)
-                        pcm_float = pcm_float[::2]
 
                     try:
                         self._incoming_queue.put_nowait(pcm_float)
@@ -261,7 +288,7 @@ class ServerOutboundTrack(MediaStreamTrack):
     def __init__(self, source_player_id: int) -> None:
         super().__init__()
         self.source_player_id = source_player_id
-        self._queue: asyncio.Queue[npt.NDArray[np.float32]] = asyncio.Queue(maxsize=50)
+        self._queue: asyncio.Queue[npt.NDArray[np.float32]] = asyncio.Queue(maxsize=10)
         self._timestamp = 0
         self._sample_rate = SAMPLE_RATE
         self._active = False  # Only queue audio when added to peer connection

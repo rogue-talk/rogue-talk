@@ -22,6 +22,7 @@ from ..common.protocol import (
     AuthResult,
     MessageType,
     PlayerInfo,
+    deserialize_audio_track_map,
     deserialize_auth_challenge,
     deserialize_auth_result,
     deserialize_door_transition,
@@ -30,11 +31,13 @@ from ..common.protocol import (
     deserialize_position_ack,
     deserialize_server_hello,
     deserialize_webrtc_answer,
+    deserialize_webrtc_offer,
     deserialize_world_state,
     read_message,
     serialize_auth_response,
     serialize_mute_status,
     serialize_position_update,
+    serialize_webrtc_answer,
     serialize_webrtc_offer,
     write_message,
 )
@@ -663,6 +666,46 @@ class BotClient:
 
         elif msg_type == MessageType.PING:
             self._send_data_channel_message(MessageType.PONG, b"")
+
+        elif msg_type == MessageType.WEBRTC_OFFER:
+            # Renegotiation offer from server (new audio tracks)
+            logger.debug("Received WEBRTC_OFFER for renegotiation")
+            offer_sdp = deserialize_webrtc_offer(payload)
+            await self._handle_renegotiation_offer(offer_sdp)
+
+        elif msg_type == MessageType.AUDIO_TRACK_MAP:
+            # Track mapping - bot doesn't need to process this currently
+            logger.debug("Received AUDIO_TRACK_MAP")
+
+    async def _handle_renegotiation_offer(self, offer_sdp: str) -> None:
+        """Handle a renegotiation offer from the server."""
+        if not self._peer_connection:
+            return
+
+        try:
+            logger.debug("Processing renegotiation offer")
+            # Set remote description (the new offer)
+            await self._peer_connection.setRemoteDescription(
+                RTCSessionDescription(sdp=offer_sdp, type="offer")
+            )
+
+            # Create and set answer
+            answer = await self._peer_connection.createAnswer()
+            await self._peer_connection.setLocalDescription(answer)
+
+            # Send answer back to server via data channel
+            answer_sdp = (
+                self._peer_connection.localDescription.sdp
+                if self._peer_connection.localDescription
+                else ""
+            )
+            self._send_data_channel_message(
+                MessageType.WEBRTC_ANSWER,
+                serialize_webrtc_answer(answer_sdp),
+            )
+            logger.debug("Sent renegotiation answer")
+        except Exception as e:
+            logger.error(f"Renegotiation failed: {e}")
 
     async def _check_proximity_changes(self) -> None:
         """Check for players entering or leaving audio range."""

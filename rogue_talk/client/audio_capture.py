@@ -1,13 +1,13 @@
 """Microphone capture for WebRTC audio track."""
 
+import threading
 import time
 from collections.abc import Callable
-from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-import sounddevice as sd
 
+from ..audio.backend import AudioInputStream, create_input_stream
 from ..common.constants import CHANNELS, FRAME_SIZE, SAMPLE_RATE
 
 
@@ -30,67 +30,74 @@ class AudioCapture:
             on_frame: Callback called with (pcm_data, timestamp_ms) for each frame
         """
         self.on_frame = on_frame
-        self.stream: sd.InputStream | None = None
+        self._stream: AudioInputStream | None = None
         self.is_muted = False
         self._start_time_ms = 0
         self.last_level = 0.0
         self._vad_holdover_count = 0  # Frames remaining in holdover period
+        self._running = False
+        self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         """Start capturing audio."""
         self._start_time_ms = int(time.time() * 1000)
-        self.stream = sd.InputStream(
+        self._stream = create_input_stream(
+            stream_name="microphone",
             samplerate=SAMPLE_RATE,
             channels=CHANNELS,
-            dtype=np.float32,
-            blocksize=FRAME_SIZE,
-            callback=self._audio_callback,
         )
-        self.stream.start()
+        self._stream.start()
+        self._running = True
+        self._thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._thread.start()
 
     def stop(self) -> None:
         """Stop capturing audio."""
-        if self.stream:
-            self.stream.stop()
-            self.stream.close()
-            self.stream = None
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=1.0)
+            self._thread = None
+        if self._stream:
+            self._stream.stop()
+            self._stream = None
 
     def set_muted(self, muted: bool) -> None:
         """Set mute state."""
         self.is_muted = muted
 
-    def _audio_callback(
-        self,
-        indata: npt.NDArray[np.float32],
-        frames: int,
-        time_info: Any,
-        status: sd.CallbackFlags,
-    ) -> None:
-        """Sounddevice callback - runs in separate thread."""
-        # Flatten to mono if needed
-        pcm: npt.NDArray[np.float32] = (
-            indata[:, 0] if indata.ndim > 1 else indata.flatten()
-        )
+    def _capture_loop(self) -> None:
+        """Background thread that reads audio and processes it."""
+        while self._running and self._stream is not None:
+            # Read audio from the stream
+            pcm = self._stream.read(FRAME_SIZE)
+            if pcm is None:
+                time.sleep(0.001)  # Brief sleep if no data
+                continue
 
-        # Track audio level
-        self.last_level = float(np.abs(pcm).max())
+            # Flatten to mono if needed
+            if pcm.ndim > 1:
+                pcm = pcm[:, 0]
+            pcm = pcm.flatten()
 
-        if self.is_muted:
-            return
+            # Track audio level
+            self.last_level = float(np.abs(pcm).max())
 
-        # Simple VAD with holdover to avoid cutting off speech
-        if self.last_level >= self.VAD_THRESHOLD:
-            # Speech detected - reset holdover
-            self._vad_holdover_count = self.VAD_HOLDOVER_FRAMES
-        elif self._vad_holdover_count > 0:
-            # In holdover period - continue sending
-            self._vad_holdover_count -= 1
-        else:
-            # Silence and holdover expired - skip frame
-            return
+            if self.is_muted:
+                continue
 
-        # Calculate timestamp
-        timestamp_ms = int(time.time() * 1000) - self._start_time_ms
+            # Simple VAD with holdover to avoid cutting off speech
+            if self.last_level >= self.VAD_THRESHOLD:
+                # Speech detected - reset holdover
+                self._vad_holdover_count = self.VAD_HOLDOVER_FRAMES
+            elif self._vad_holdover_count > 0:
+                # In holdover period - continue sending
+                self._vad_holdover_count -= 1
+            else:
+                # Silence and holdover expired - skip frame
+                continue
 
-        # Send raw PCM to callback (WebRTC track handles encoding)
-        self.on_frame(pcm, timestamp_ms)
+            # Calculate timestamp
+            timestamp_ms = int(time.time() * 1000) - self._start_time_ms
+
+            # Send raw PCM to callback (WebRTC track handles encoding)
+            self.on_frame(pcm, timestamp_ms)

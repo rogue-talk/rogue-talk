@@ -417,6 +417,22 @@ class GameServer:
                 if volume > 0.0 and recipient.id in sources_in_range:
                     sources_in_range[recipient.id].add(source.id)
 
+        # Create tracks proactively for all players in range
+        # (don't wait for audio to arrive - this ensures bidirectional tracks)
+        for recipient in list(self.players.values()):
+            if not recipient.webrtc_connected:
+                continue
+            for source_id in sources_in_range.get(recipient.id, set()):
+                if source_id not in recipient.outbound_tracks:
+                    src_player = self.players.get(source_id)
+                    if src_player:
+                        new_track = ServerOutboundTrack(source_id)
+                        recipient.outbound_tracks[source_id] = new_track
+                        recipient.needs_renegotiation = True
+                        logger.debug(
+                            f"Proactively created track for {src_player.name} -> {recipient.name}"
+                        )
+
         # Now route audio frames from players who have audio to send
         for source in list(self.players.values()):
             if not source.webrtc_connected or source.audio_relay is None:
@@ -666,8 +682,10 @@ class GameServer:
             # Event: incoming audio track
             @pc.on("track")
             def on_track(track: Any) -> None:
+                logger.debug(f"on_track event: kind={track.kind} for {player.name}")
                 if track.kind == "audio":
                     print(f"Audio track received from player {player.name}")
+                    logger.debug(f"Audio track received from player {player.name}")
                     audio_relay.set_track(track)
                     asyncio.create_task(audio_relay.start_receiving())
 

@@ -971,7 +971,7 @@ class GameClient:
             from .audio_capture import AudioCapture
             from .audio_playback import AudioPlayback
 
-            # Start tile sounds (has its own output stream)
+            # Start tile sounds (has its own "environment" output stream)
             self._tile_sound_player.start()
 
             # Start voice playback (per-player streams)

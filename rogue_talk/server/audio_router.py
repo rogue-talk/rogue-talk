@@ -50,8 +50,11 @@ def get_audio_recipients(
     if cached is not None:
         cached_pos, cached_recipients = cached
         if cached_pos == (source_x, source_y):
-            # Verify recipients haven't moved either
+            # Verify recipients haven't moved AND no new players in range
             still_valid = True
+            cached_ids = {p.id for p, _ in cached_recipients}
+
+            # Check if any cached recipient moved or left
             for player, old_volume in cached_recipients:
                 if player.id not in players:
                     still_valid = False
@@ -60,6 +63,18 @@ def get_audio_recipients(
                 if abs(new_volume - old_volume) > 0.01:
                     still_valid = False
                     break
+
+            # Check if any NEW player has entered range
+            if still_valid:
+                for player_id, player in players.items():
+                    if player_id == source.id or player_id in cached_ids:
+                        continue
+                    volume = get_volume(player.x - source_x, player.y - source_y)
+                    if volume > 0.0:
+                        # New player in range - cache invalid
+                        still_valid = False
+                        break
+
             if still_valid:
                 return cached_recipients
 

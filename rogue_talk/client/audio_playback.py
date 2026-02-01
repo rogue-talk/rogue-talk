@@ -5,20 +5,17 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from typing import TYPE_CHECKING, Any
+import time
+from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
-import sounddevice as sd
 
-from ..common.constants import CHANNELS, FRAME_SIZE, SAMPLE_RATE
-
-# Set application name for PulseAudio/PipeWire (before any streams are created)
-os.environ.setdefault("PULSE_PROP_application.name", "rogue_talk")
+from ..audio.backend import AudioOutputStream, create_output_stream
+from ..common.constants import FRAME_SIZE, SAMPLE_RATE
 
 if TYPE_CHECKING:
     from ..audio.webrtc_tracks import AudioPlaybackTrack
-    from .tile_sound_player import TileSoundPlayer
 
 # Debug logging to file (doesn't interfere with terminal UI)
 # Use PID in filename so multiple clients on same machine have separate logs
@@ -30,11 +27,11 @@ _logger.setLevel(logging.DEBUG)
 
 
 class PlayerAudioStream:
-    """Audio output stream for a single player's voice."""
+    """Audio output stream for a single player's voice using PyAV backend."""
 
-    # Buffer settings
-    MIN_BUFFER = FRAME_SIZE * 5  # 100ms before starting playback
-    MAX_BUFFER = FRAME_SIZE * 15  # 300ms max buffer
+    # Buffer settings - balance between latency and jitter handling
+    MIN_BUFFER = FRAME_SIZE * 3  # 60ms before starting playback
+    MAX_BUFFER = FRAME_SIZE * 10  # 200ms max buffer
 
     def __init__(self, player_id: int, player_name: str = "") -> None:
         self.player_id = player_id
@@ -43,22 +40,26 @@ class PlayerAudioStream:
         self._write_pos = 0
         self._read_pos = 0
         self._started = False
-        self._stream: sd.OutputStream | None = None
+        self._stream: AudioOutputStream | None = None
         self._lock = threading.Lock()
+        self._running = False
+        self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         """Start the audio output stream."""
+        if self._running:
+            return
         try:
-            # Set stream name for PulseAudio/PipeWire
-            os.environ["PULSE_PROP_media.name"] = f"player:{self.player_name}"
-            self._stream = sd.OutputStream(
+            # Create named stream for this player (shows up in pavucontrol)
+            self._stream = create_output_stream(
+                stream_name=f"player:{self.player_name}",
                 samplerate=SAMPLE_RATE,
-                channels=CHANNELS,
-                dtype=np.float32,
-                blocksize=FRAME_SIZE,
-                callback=self._callback,
+                channels=1,
             )
             self._stream.start()
+            self._running = True
+            self._thread = threading.Thread(target=self._playback_loop, daemon=True)
+            self._thread.start()
         except Exception as e:
             _logger.error(
                 f"Failed to start audio stream for player {self.player_id}: {e}"
@@ -66,9 +67,12 @@ class PlayerAudioStream:
 
     def stop(self) -> None:
         """Stop the audio output stream."""
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=1.0)
+            self._thread = None
         if self._stream:
             self._stream.stop()
-            self._stream.close()
             self._stream = None
 
     def feed_audio(self, pcm_data: npt.NDArray[np.float32], volume: float) -> None:
@@ -98,14 +102,43 @@ class PlayerAudioStream:
                 self._ring_buffer[: end_pos - buf_size] = samples[first:]
             self._write_pos = end_pos % buf_size
 
-    def _callback(
-        self,
-        outdata: npt.NDArray[np.float32],
-        frames: int,
-        time_info: Any,
-        status: sd.CallbackFlags,
-    ) -> None:
-        """Sounddevice callback."""
+    def _playback_loop(self) -> None:
+        """Background thread that reads from ring buffer and writes to audio output."""
+        frame_duration = FRAME_SIZE / SAMPLE_RATE
+        frame_count = 0
+        underrun_count = 0
+
+        while self._running and self._stream is not None:
+            start_time = time.perf_counter()
+
+            # Generate the next frame from ring buffer
+            frame, is_underrun = self._get_frame_with_status()
+            frame_count += 1
+
+            if is_underrun:
+                underrun_count += 1
+
+            if frame_count % 500 == 1:
+                with self._lock:
+                    buf_size = len(self._ring_buffer)
+                    buffer_samples = (self._write_pos - self._read_pos) % buf_size
+                _logger.debug(
+                    f"PlayerAudioStream {self.player_id} playback: "
+                    f"frame={frame_count}, underruns={underrun_count}, "
+                    f"buffer={buffer_samples}/{self.MIN_BUFFER}"
+                )
+
+            # Write to output stream
+            self._stream.write(frame)
+
+            # Sleep to maintain timing
+            elapsed = time.perf_counter() - start_time
+            sleep_time = frame_duration - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+    def _get_frame_with_status(self) -> tuple[npt.NDArray[np.float32], bool]:
+        """Get the next audio frame from ring buffer with underrun status."""
         with self._lock:
             buf_size = len(self._ring_buffer)
             buffer_len = (self._write_pos - self._read_pos) % buf_size
@@ -114,23 +147,28 @@ class PlayerAudioStream:
                 if buffer_len >= self.MIN_BUFFER:
                     self._started = True
                 else:
-                    outdata[:] = 0
-                    return
+                    # Still buffering - not a real underrun
+                    return np.zeros(FRAME_SIZE, dtype=np.float32), False
 
             if buffer_len >= FRAME_SIZE:
                 read_pos = self._read_pos
                 end_pos = read_pos + FRAME_SIZE
                 if end_pos <= buf_size:
-                    outdata[:, 0] = self._ring_buffer[read_pos:end_pos]
+                    frame = self._ring_buffer[read_pos:end_pos].copy()
                 else:
                     first = buf_size - read_pos
-                    outdata[:first, 0] = self._ring_buffer[read_pos:buf_size]
-                    outdata[first:, 0] = self._ring_buffer[: end_pos - buf_size]
+                    frame = np.concatenate(
+                        [
+                            self._ring_buffer[read_pos:buf_size],
+                            self._ring_buffer[: end_pos - buf_size],
+                        ]
+                    )
                 self._read_pos = end_pos % buf_size
+                return frame, False
             else:
-                # Underrun
-                outdata[:] = 0
+                # Underrun - buffer emptied during playback
                 self._started = False
+                return np.zeros(FRAME_SIZE, dtype=np.float32), True
 
 
 class AudioPlayback:
@@ -144,8 +182,6 @@ class AudioPlayback:
         # Multiple WebRTC tracks: source_player_id -> AudioPlaybackTrack
         self._playback_tracks: dict[int, "AudioPlaybackTrack"] = {}
         self._tracks_lock = threading.Lock()
-        # Tile sounds (will have own stream)
-        self.tile_sound_player: TileSoundPlayer | None = None
         self._running = False
         # Poll thread for WebRTC frames
         self._poll_thread: threading.Thread | None = None
@@ -206,8 +242,6 @@ class AudioPlayback:
 
     def _poll_webrtc(self) -> None:
         """Poll all WebRTC tracks for frames and route to player streams."""
-        import time
-
         frame_count = 0
         while self._running:
             # Get snapshot of tracks to poll
@@ -223,7 +257,8 @@ class AudioPlayback:
                     frame_count += 1
                     if frame_count % 500 == 1:
                         _logger.debug(
-                            f"Received audio frame {frame_count} from player {source_player_id}"
+                            f"Received audio frame {frame_count} from player {source_player_id}, "
+                            f"samples={len(pcm_data)}"
                         )
                     stream = self._get_or_create_stream(source_player_id)
                     # Volume is always 1.0 here - server already applied distance scaling

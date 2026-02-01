@@ -3,21 +3,18 @@
 from __future__ import annotations
 
 import math
-import os
 import threading
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable
+import time
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 import numpy.typing as npt
-import sounddevice as sd
 
+from ..audio.backend import AudioOutputStream, create_output_stream
 from ..audio.sound_loader import SoundCache
 from ..common import tiles
-from ..common.constants import CHANNELS, FRAME_SIZE, SAMPLE_RATE
-
-# Set application name for PulseAudio/PipeWire
-os.environ.setdefault("PULSE_PROP_application.name", "rogue_talk")
+from ..common.constants import FRAME_SIZE, SAMPLE_RATE
 
 if TYPE_CHECKING:
     from .level import Level
@@ -56,38 +53,52 @@ class TileSoundPlayer:
         self._lock = threading.Lock()
         self._one_shots: list[OneShotSound] = []
         self._ambient_sounds: dict[str, LoopingSound] = {}
-        self._stream: sd.OutputStream | None = None
+        self._stream: AudioOutputStream | None = None
+        self._running = False
+        self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         """Start the tile sound output stream."""
-        # Set stream name for PulseAudio/PipeWire
-        os.environ["PULSE_PROP_media.name"] = "environment"
-        self._stream = sd.OutputStream(
+        if self._running:
+            return
+        self._stream = create_output_stream(
+            stream_name="environment",
             samplerate=SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype=np.float32,
-            blocksize=FRAME_SIZE,
-            callback=self._audio_callback,
+            channels=1,
         )
         self._stream.start()
+        self._running = True
+        self._thread = threading.Thread(target=self._playback_loop, daemon=True)
+        self._thread.start()
 
     def stop(self) -> None:
         """Stop the tile sound output stream."""
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=1.0)
+            self._thread = None
         if self._stream:
             self._stream.stop()
-            self._stream.close()
             self._stream = None
 
-    def _audio_callback(
-        self,
-        outdata: npt.NDArray[np.float32],
-        frames: int,
-        time_info: Any,
-        status: sd.CallbackFlags,
-    ) -> None:
-        """Sounddevice callback - get mixed tile sounds."""
-        mixed = self._get_mixed_frame()
-        outdata[:, 0] = mixed
+    def _playback_loop(self) -> None:
+        """Background thread that generates and writes audio."""
+        frame_duration = FRAME_SIZE / SAMPLE_RATE
+
+        while self._running and self._stream is not None:
+            start_time = time.perf_counter()
+
+            # Generate the next frame
+            mixed = self._get_mixed_frame()
+
+            # Write to output stream
+            self._stream.write(mixed)
+
+            # Sleep to maintain timing
+            elapsed = time.perf_counter() - start_time
+            sleep_time = frame_duration - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
 
     def on_player_move(self, x: int, y: int, level: Level) -> None:
         """Called when player moves to a new tile. Plays walking sound.
