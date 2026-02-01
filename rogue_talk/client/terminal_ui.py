@@ -1,6 +1,7 @@
 """Terminal UI rendering with blessed and viewport support."""
 
 import math
+import sys
 import time
 
 from blessed import Terminal
@@ -293,7 +294,10 @@ class TerminalUI:
         # Clear any remaining lines from previous frame
         output.append(str(self.term.clear_eos))
 
-        print("\n".join(output), end="", flush=True)
+        # Write entire frame atomically to avoid tearing on slow/loaded systems
+        frame = "\n".join(output)
+        sys.stdout.buffer.write(frame.encode())
+        sys.stdout.buffer.flush()
 
     def _get_map_cell_char_with_visibility(
         self,
