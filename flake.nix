@@ -64,8 +64,6 @@
                   pkgs.libopus
                   pkgs.portaudio
                   pkgs.libsndfile
-                  pkgs.libvpx
-                  pkgs.ffmpeg
                 ]
               }"
             ];
@@ -116,12 +114,10 @@
               pkgs.libopus
               pkgs.portaudio
               pkgs.libsndfile
-              pkgs.libvpx
-              pkgs.ffmpeg
             ];
 
             shellHook = ''
-              export LD_LIBRARY_PATH="${pkgs.libopus}/lib:${pkgs.portaudio}/lib:${pkgs.libsndfile}/lib:${pkgs.libvpx}/lib:${pkgs.ffmpeg}/lib:$LD_LIBRARY_PATH"
+              export LD_LIBRARY_PATH="${pkgs.libopus}/lib:${pkgs.portaudio}/lib:${pkgs.libsndfile}/lib:$LD_LIBRARY_PATH"
             '';
           };
         }
