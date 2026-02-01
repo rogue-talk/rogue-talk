@@ -44,11 +44,13 @@ class PulseOutputStream(AudioOutputStream):
         self._stream: Any | None = None
         self._running = False
         self._thread: threading.Thread | None = None
-        # Small buffer to minimize latency (~100ms at 20ms/frame)
+        # Buffer to handle timing jitter (~200ms at 20ms/frame)
         self._queue: queue.Queue[npt.NDArray[np.float32] | None] = queue.Queue(
-            maxsize=5
+            maxsize=10
         )
         self._pts = 0
+        self._drop_count = 0
+        self._frame_count = 0
 
     def start(self) -> None:
         """Start the output stream."""
@@ -101,11 +103,16 @@ class PulseOutputStream(AudioOutputStream):
         """Write audio data to the stream."""
         if not self._running:
             return
+        self._frame_count += 1
         try:
             self._queue.put_nowait(data.copy())
         except queue.Full:
-            # Drop frame if queue is full
-            pass
+            self._drop_count += 1
+        if self._frame_count % 500 == 0:
+            _logger.debug(
+                f"PulseOutputStream {self.stream_name}: "
+                f"frames={self._frame_count}, drops={self._drop_count}"
+            )
 
     def _write_loop(self) -> None:
         """Background thread that writes audio to PulseAudio."""

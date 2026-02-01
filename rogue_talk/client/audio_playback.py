@@ -44,6 +44,10 @@ class PlayerAudioStream:
         self._lock = threading.Lock()
         self._running = False
         self._thread: threading.Thread | None = None
+        # Counters for debugging audio issues
+        self._overflow_count = 0
+        self._underrun_count = 0
+        self._frame_count = 0
 
     def start(self) -> None:
         """Start the audio output stream."""
@@ -87,9 +91,10 @@ class PlayerAudioStream:
             used = (self._write_pos - self._read_pos) % buf_size
             available = buf_size - used - 1
             if sample_len > available:
-                # Discard oldest data
+                # Discard oldest data (overflow)
                 discard = sample_len - available
                 self._read_pos = (self._read_pos + discard) % buf_size
+                self._overflow_count += 1
 
             # Write to ring buffer
             write_pos = self._write_pos
@@ -105,37 +110,39 @@ class PlayerAudioStream:
     def _playback_loop(self) -> None:
         """Background thread that reads from ring buffer and writes to audio output."""
         frame_duration = FRAME_SIZE / SAMPLE_RATE
-        frame_count = 0
-        underrun_count = 0
+        # Use absolute timing to prevent drift
+        next_frame_time = time.perf_counter()
 
         while self._running and self._stream is not None:
-            start_time = time.perf_counter()
-
             # Generate the next frame from ring buffer
             frame, is_underrun = self._get_frame_with_status()
-            frame_count += 1
+            self._frame_count += 1
 
             if is_underrun:
-                underrun_count += 1
+                self._underrun_count += 1
 
-            if frame_count % 500 == 1:
+            # Log stats periodically (every ~10 seconds)
+            if self._frame_count % 500 == 1:
                 with self._lock:
                     buf_size = len(self._ring_buffer)
                     buffer_samples = (self._write_pos - self._read_pos) % buf_size
                 _logger.debug(
-                    f"PlayerAudioStream {self.player_id} playback: "
-                    f"frame={frame_count}, underruns={underrun_count}, "
-                    f"buffer={buffer_samples}/{self.MIN_BUFFER}"
+                    f"PlayerAudioStream {self.player_id}: "
+                    f"frames={self._frame_count}, underruns={self._underrun_count}, "
+                    f"overflows={self._overflow_count}, buffer={buffer_samples}"
                 )
 
             # Write to output stream
             self._stream.write(frame)
 
-            # Sleep to maintain timing
-            elapsed = time.perf_counter() - start_time
-            sleep_time = frame_duration - elapsed
+            # Sleep until next frame time (absolute timing prevents drift)
+            next_frame_time += frame_duration
+            sleep_time = next_frame_time - time.perf_counter()
             if sleep_time > 0:
                 time.sleep(sleep_time)
+            elif sleep_time < -0.1:
+                # We're way behind - reset timing to catch up
+                next_frame_time = time.perf_counter()
 
     def _get_frame_with_status(self) -> tuple[npt.NDArray[np.float32], bool]:
         """Get the next audio frame from ring buffer with underrun status."""
@@ -166,8 +173,10 @@ class PlayerAudioStream:
                 self._read_pos = end_pos % buf_size
                 return frame, False
             else:
-                # Underrun - buffer emptied during playback
-                self._started = False
+                # Underrun - return silence but DON'T reset _started
+                # Resetting would require rebuffering MIN_BUFFER (60ms) which
+                # causes noticeable audio gaps. Instead, just play silence for
+                # this frame and resume immediately when data arrives.
                 return np.zeros(FRAME_SIZE, dtype=np.float32), True
 
 

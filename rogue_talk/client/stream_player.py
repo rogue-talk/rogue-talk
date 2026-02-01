@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import math
+import os
 import queue
 import threading
 import time
@@ -14,6 +16,12 @@ import numpy.typing as npt
 
 from ..audio.backend import AudioOutputStream, create_output_stream
 from ..common.constants import FRAME_SIZE, SAMPLE_RATE
+
+_logger = logging.getLogger(__name__)
+_debug_handler = logging.FileHandler(f"/tmp/rogue_talk_stream_{os.getpid()}.log")
+_debug_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+_logger.addHandler(_debug_handler)
+_logger.setLevel(logging.DEBUG)
 
 if TYPE_CHECKING:
     from .level import Level, StreamInfo
@@ -41,6 +49,9 @@ class ActiveStream:
     # Current position in buffered chunk
     buffer: npt.NDArray[np.float32] | None = None
     buffer_pos: int = 0
+    # Stats
+    drop_count: int = 0
+    frame_count: int = 0
 
 
 class StreamPlayer:
@@ -90,21 +101,24 @@ class StreamPlayer:
     def _playback_loop(self) -> None:
         """Background thread that generates and writes mixed audio."""
         frame_duration = FRAME_SIZE / SAMPLE_RATE
+        # Use absolute timing to prevent drift
+        next_frame_time = time.perf_counter()
 
         while self._running and self._stream is not None:
-            start_time = time.perf_counter()
-
             # Generate the next frame
             mixed = self._get_mixed_frame()
 
             # Write to output stream
             self._stream.write(mixed)
 
-            # Sleep to maintain timing
-            elapsed = time.perf_counter() - start_time
-            sleep_time = frame_duration - elapsed
+            # Sleep until next frame time (absolute timing prevents drift)
+            next_frame_time += frame_duration
+            sleep_time = next_frame_time - time.perf_counter()
             if sleep_time > 0:
                 time.sleep(sleep_time)
+            elif sleep_time < -0.1:
+                # We're way behind - reset timing to catch up
+                next_frame_time = time.perf_counter()
 
     def update_streams(
         self,
@@ -162,7 +176,8 @@ class StreamPlayer:
             x=stream_info.x,
             y=stream_info.y,
             radius=stream_info.radius,
-            audio_queue=queue.Queue(maxsize=50),
+            # Larger buffer (100 chunks) to handle HTTP stream bursts
+            audio_queue=queue.Queue(maxsize=100),
             running=True,
         )
         self._streams[stream_info.url] = stream
@@ -245,12 +260,20 @@ class StreamPlayer:
                     if framerate != SAMPLE_RATE:
                         arr = self._resample(arr, framerate, SAMPLE_RATE)
 
-                    # Put in queue (drop if full)
-                    try:
-                        if stream.audio_queue is not None:
-                            stream.audio_queue.put_nowait(arr.astype(np.float32))
-                    except queue.Full:
-                        pass
+                    # Put in queue with blocking (backpressure to HTTP reader)
+                    stream.frame_count += 1
+                    if stream.audio_queue is not None:
+                        try:
+                            # Block up to 1 second - provides backpressure
+                            stream.audio_queue.put(arr.astype(np.float32), timeout=1.0)
+                        except queue.Full:
+                            # Timeout - stream is stalled, drop frame
+                            stream.drop_count += 1
+                    if stream.frame_count % 500 == 0:
+                        _logger.debug(
+                            f"Stream {stream.url}: frames={stream.frame_count}, "
+                            f"drops={stream.drop_count}"
+                        )
 
         except Exception:
             # Stream error - will be cleaned up when faded out

@@ -43,6 +43,8 @@ class AudioCaptureTrack(MediaStreamTrack):
         self._frame_size = FRAME_SIZE
         # Track audio level for UI
         self.last_level: float = 0.0
+        # Drop counter for debugging
+        self._drop_count = 0
 
     def feed_audio(self, pcm_data: npt.NDArray[np.float32]) -> None:
         """Feed audio data from the capture callback (thread-safe)."""
@@ -51,7 +53,9 @@ class AudioCaptureTrack(MediaStreamTrack):
         try:
             self._queue.put_nowait(pcm_data.copy())
         except asyncio.QueueFull:
-            pass  # Drop frame if queue is full
+            self._drop_count += 1
+            if self._drop_count % 50 == 1:
+                logger.debug(f"AudioCaptureTrack: dropped {self._drop_count} frames")
 
     async def recv(self) -> Any:
         """Called by aiortc to get the next audio frame."""
@@ -97,11 +101,14 @@ class AudioPlaybackTrack:
     def __init__(self, source_player_id: int = 0) -> None:
         self.source_player_id = source_player_id
         # Use thread-safe queue since playback runs in separate thread
-        self._queue: queue.Queue[npt.NDArray[np.float32]] = queue.Queue(maxsize=10)
+        # Larger buffer (50 frames = 1s) to handle bursts from WebRTC
+        self._queue: queue.Queue[npt.NDArray[np.float32]] = queue.Queue(maxsize=50)
         self._running = False
         self._task: asyncio.Task[None] | None = None
         self._track: MediaStreamTrack | None = None
         self._volume: float = 1.0
+        self._drop_count = 0
+        self._frame_count = 0
 
     def set_track(self, track: MediaStreamTrack) -> None:
         """Set the WebRTC track to receive audio from."""
@@ -183,10 +190,17 @@ class AudioPlaybackTrack:
                     else:
                         pcm_float = pcm_data.astype(np.float32)
 
+                    self._frame_count += 1
                     try:
                         self._queue.put_nowait(pcm_float * self._volume)
                     except queue.Full:
-                        pass
+                        self._drop_count += 1
+                    # Log stats periodically
+                    if self._frame_count % 500 == 0:
+                        logger.debug(
+                            f"AudioPlaybackTrack player {self.source_player_id}: "
+                            f"frames={self._frame_count}, drops={self._drop_count}"
+                        )
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -212,6 +226,8 @@ class ServerAudioRelay:
         self._track: MediaStreamTrack | None = None
         self._running = False
         self._receive_task: asyncio.Task[None] | None = None
+        self._drop_count = 0
+        self._frame_count = 0
 
     def set_track(self, track: MediaStreamTrack) -> None:
         """Set the incoming audio track from this player."""
@@ -265,10 +281,16 @@ class ServerAudioRelay:
                     else:
                         pcm_float = pcm_data.astype(np.float32)
 
+                    self._frame_count += 1
                     try:
                         self._incoming_queue.put_nowait(pcm_float)
                     except asyncio.QueueFull:
-                        pass
+                        self._drop_count += 1
+                    if self._frame_count % 500 == 0:
+                        logger.debug(
+                            f"ServerAudioRelay player {self.player_id}: "
+                            f"frames={self._frame_count}, drops={self._drop_count}"
+                        )
             except Exception:
                 break
 
@@ -292,6 +314,8 @@ class ServerOutboundTrack(MediaStreamTrack):
         self._timestamp = 0
         self._sample_rate = SAMPLE_RATE
         self._active = False  # Only queue audio when added to peer connection
+        self._drop_count = 0
+        self._frame_count = 0
 
     def activate(self) -> None:
         """Mark track as active (added to peer connection). Audio will now be queued."""
@@ -301,10 +325,16 @@ class ServerOutboundTrack(MediaStreamTrack):
         """Queue audio data to send to the client."""
         if not self._active:
             return  # Don't queue until track is in peer connection
+        self._frame_count += 1
         try:
             self._queue.put_nowait(pcm_data.copy())
         except asyncio.QueueFull:
-            pass  # Drop frame if queue is full
+            self._drop_count += 1
+        if self._frame_count % 500 == 0:
+            logger.debug(
+                f"ServerOutboundTrack player {self.source_player_id}: "
+                f"frames={self._frame_count}, drops={self._drop_count}"
+            )
 
     async def recv(self) -> Any:
         """Called by aiortc to get the next audio frame to send."""
