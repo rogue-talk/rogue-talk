@@ -8,7 +8,7 @@ from blessed import Terminal
 
 from ..common import tiles
 from ..common.protocol import PlayerInfo
-from .level import DoorInfo, Level
+from .level import DoorInfo, Level, StreamInfo
 from .viewport import Viewport
 
 # Lighting constants - gradual fade zones
@@ -325,6 +325,11 @@ class TerminalUI:
 
         # Check direct line of sight first (most cells have this - fast path)
         if self._has_line_of_sight(player_x, player_y, x, y, level):
+            # Check if there's a stream at this position
+            stream = level.get_stream_at(x, y)
+            if stream is not None:
+                return (self._render_stream_with_lighting(distance), True)
+
             # Direct visibility - render normally
             tile_char = level.get_tile(x, y)
             return (self._render_tile_with_lighting(tile_char, distance, x), True)
@@ -670,6 +675,25 @@ class TerminalUI:
                 return None
 
         return None
+
+    def _render_stream_with_lighting(self, distance: float) -> str:
+        """Render a stream source (speaker) with distance-based lighting."""
+        # Use musical note character ♪ for streams
+        char = "♪"
+
+        # Apply lighting based on distance - cyan color for streams
+        if distance <= LIGHT_FULL_RADIUS:
+            return str(self.term.bold_cyan(char))
+        elif distance <= LIGHT_NORMAL_RADIUS:
+            return str(self.term.cyan(char))
+        elif distance <= LIGHT_DIM_RADIUS:
+            return f"{self.term.dim}{self.term.cyan}{char}{self.term.normal}"
+        elif distance <= LIGHT_DARKER_RADIUS:
+            # Use medium gray
+            return str(self.term.color(245)(char))  # type: ignore
+        else:
+            # Use dark gray
+            return str(self.term.color(239)(char))  # type: ignore
 
     def _render_tile_with_portal_tint(
         self, tile_char: str, distance: float, tile_x: int = 0

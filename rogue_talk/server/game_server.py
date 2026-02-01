@@ -56,7 +56,7 @@ from ..common.protocol import (
     write_message,
 )
 from .audio_router import clear_recipient_cache, get_audio_recipients, get_volume
-from .level import DoorInfo, Level
+from .level import DoorInfo, Level, StreamInfo
 from .player import Player
 from .storage import PlayerStorage
 from .world import World
@@ -238,25 +238,42 @@ class GameServer:
         return tiles
 
     def _parse_level_json(self, level: Level, data: dict[str, object]) -> None:
-        """Parse level.json data and populate Level with door metadata."""
+        """Parse level.json data and populate Level with door and stream metadata."""
         # Parse doors from level.json
         doors_data = data.get("doors", [])
-        if not isinstance(doors_data, list):
-            return
-        for door_data in doors_data:
-            if not isinstance(door_data, dict):
-                continue
-            x = int(door_data["x"])
-            y = int(door_data["y"])
-            target_level = door_data.get("target_level")
-            door_info = DoorInfo(
-                x=x,
-                y=y,
-                target_level=str(target_level) if target_level else None,
-                target_x=int(door_data["target_x"]),
-                target_y=int(door_data["target_y"]),
-            )
-            level.doors[(x, y)] = door_info
+        if isinstance(doors_data, list):
+            for door_data in doors_data:
+                if not isinstance(door_data, dict):
+                    continue
+                x = int(door_data["x"])
+                y = int(door_data["y"])
+                target_level = door_data.get("target_level")
+                door_info = DoorInfo(
+                    x=x,
+                    y=y,
+                    target_level=str(target_level) if target_level else None,
+                    target_x=int(door_data["target_x"]),
+                    target_y=int(door_data["target_y"]),
+                )
+                level.doors[(x, y)] = door_info
+
+        # Parse streams from level.json
+        streams_data = data.get("streams", [])
+        if isinstance(streams_data, list):
+            for stream_data in streams_data:
+                if not isinstance(stream_data, dict):
+                    continue
+                x = int(stream_data["x"])
+                y = int(stream_data["y"])
+                url = str(stream_data["url"])
+                radius = int(stream_data.get("radius", 5))
+                stream_info = StreamInfo(
+                    x=x,
+                    y=y,
+                    url=url,
+                    radius=radius,
+                )
+                level.streams[(x, y)] = stream_info
 
     async def start(self) -> None:
         server = await asyncio.start_server(

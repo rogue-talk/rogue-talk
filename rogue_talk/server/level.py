@@ -20,6 +20,16 @@ class DoorInfo:
 
 
 @dataclass
+class StreamInfo:
+    """Metadata for an audio stream at a specific position."""
+
+    x: int
+    y: int
+    url: str
+    radius: int = 5  # How far the stream can be heard (in tiles)
+
+
+@dataclass
 class Level:
     """Represents a game level loaded from an ASCII file."""
 
@@ -28,6 +38,7 @@ class Level:
     tiles: list[list[str]]
     spawn_positions: list[tuple[int, int]] = field(default_factory=list)
     doors: dict[tuple[int, int], DoorInfo] = field(default_factory=dict)
+    streams: dict[tuple[int, int], StreamInfo] = field(default_factory=dict)
 
     @classmethod
     def from_file(cls, path: str) -> Level:

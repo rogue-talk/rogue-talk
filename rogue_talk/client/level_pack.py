@@ -6,7 +6,7 @@ import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .level import DoorInfo
+from .level import DoorInfo, StreamInfo
 
 
 @dataclass
@@ -164,3 +164,31 @@ def parse_doors(level_json_path: Path | None) -> list[DoorInfo]:
         doors.append(door)
 
     return doors
+
+
+def parse_streams(level_json_path: Path | None) -> list[StreamInfo]:
+    """Parse stream definitions from level.json.
+
+    Args:
+        level_json_path: Path to level.json file, or None
+
+    Returns:
+        List of StreamInfo objects
+    """
+    if level_json_path is None or not level_json_path.exists():
+        return []
+
+    with open(level_json_path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    streams: list[StreamInfo] = []
+    for stream_data in data.get("streams", []):
+        stream = StreamInfo(
+            x=stream_data["x"],
+            y=stream_data["y"],
+            url=stream_data["url"],
+            radius=stream_data.get("radius", 5),
+        )
+        streams.append(stream)
+
+    return streams

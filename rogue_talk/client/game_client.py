@@ -67,8 +67,10 @@ from .level_pack import (
     create_level_pack_from_dir,
     extract_level_pack,
     parse_doors,
+    parse_streams,
     write_files_to_dir,
 )
+from .stream_player import StreamPlayer
 from .terminal_ui import TerminalUI
 from .tile_sound_player import TileSoundPlayer
 
@@ -127,6 +129,8 @@ class GameClient:
         # Tile sound system
         self._sound_cache: SoundCache = SoundCache()
         self._tile_sound_player: TileSoundPlayer = TileSoundPlayer(self._sound_cache)
+        # Audio stream player (for radio streams at map locations)
+        self._stream_player: StreamPlayer = StreamPlayer()
         # Other levels loaded for see-through portals
         self.other_levels: dict[str, Level] = {}
         # WebRTC connection events
@@ -221,6 +225,10 @@ class GameClient:
         # Parse and set doors from level.json
         doors = parse_doors(level_pack.level_json_path)
         self.level.doors = doors
+
+        # Parse and set streams from level.json
+        streams = parse_streams(level_pack.level_json_path)
+        self.level.streams = streams
 
         # Set up WebRTC connection
         if not await self._setup_webrtc():
@@ -789,6 +797,7 @@ class GameClient:
         # Update sound assets directory for new level pack
         self._sound_cache.set_assets_dir(level_pack.assets_dir)
         self._tile_sound_player.clear()
+        self._stream_player.clear()
 
         # Load the new level from the pack
         with open(level_pack.level_path, encoding="utf-8") as f:
@@ -830,6 +839,10 @@ class GameClient:
         # Parse and set doors for new level
         doors = parse_doors(level_pack.level_json_path)
         self.level.doors = doors
+
+        # Parse and set streams for new level
+        streams = parse_streams(level_pack.level_json_path)
+        self.level.streams = streams
 
         # Load other levels for see-through portals
         await self._load_see_through_portal_levels()
@@ -944,6 +957,9 @@ class GameClient:
             self.x, self.y, self.level, self.ui.has_line_of_sound
         )
 
+        # Update audio streams based on nearby stream sources
+        self._stream_player.update_streams(self.x, self.y, self.level)
+
         # Get mic level from WebRTC audio track or legacy capture
         if self.audio_capture_track:
             mic_level = self.audio_capture_track.last_level
@@ -974,6 +990,9 @@ class GameClient:
             # Start tile sounds (has its own "environment" output stream)
             self._tile_sound_player.start()
 
+            # Start audio stream player (has its own "radio" output stream)
+            self._stream_player.start()
+
             # Start voice playback (per-player streams)
             # Tracks are added dynamically via add_playback_track when they arrive
             self.audio_playback = AudioPlayback()
@@ -995,6 +1014,7 @@ class GameClient:
         if self.audio_playback:
             self.audio_playback.stop()
         self._tile_sound_player.stop()
+        self._stream_player.stop()
 
     async def _send_position_updates(self) -> None:
         """Send position updates from the queue to the server via data channel."""

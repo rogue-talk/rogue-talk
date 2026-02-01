@@ -21,6 +21,16 @@ class DoorInfo:
 
 
 @dataclass
+class StreamInfo:
+    """Information about an audio stream in a level."""
+
+    x: int
+    y: int
+    url: str
+    radius: int = 5  # How far the stream can be heard (in tiles)
+
+
+@dataclass
 class Level:
     """Client-side level representation."""
 
@@ -28,7 +38,9 @@ class Level:
     height: int
     tiles: list[list[str]]
     doors: list[DoorInfo] | None = None
+    streams: list[StreamInfo] | None = None
     _see_through_door_cache: dict[tuple[int, int], DoorInfo] | None = None
+    _stream_cache: dict[tuple[int, int], StreamInfo] | None = None
 
     @classmethod
     def from_bytes(cls, data: bytes) -> Level:
@@ -66,3 +78,12 @@ class Level:
                     if door.see_through:
                         self._see_through_door_cache[(door.x, door.y)] = door
         return self._see_through_door_cache.get((x, y))
+
+    def get_stream_at(self, x: int, y: int) -> StreamInfo | None:
+        """Get a stream at the given position, or None (O(1) cached)."""
+        if self._stream_cache is None:
+            self._stream_cache = {}
+            if self.streams:
+                for stream in self.streams:
+                    self._stream_cache[(stream.x, stream.y)] = stream
+        return self._stream_cache.get((x, y))

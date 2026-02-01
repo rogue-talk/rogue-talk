@@ -16,5 +16,13 @@
       "target_y": 5,
       "see_through": true
     }
+  ],
+  "streams": [
+    {
+      "x": 50,
+      "y": 17,
+      "url": "https://radio.lassul.us/music.ogg",
+      "radius": 5
+    }
   ]
 }
