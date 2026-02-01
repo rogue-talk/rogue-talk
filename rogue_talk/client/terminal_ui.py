@@ -37,6 +37,9 @@ class TerminalUI:
         self._cache_level_id: int | None = None
         self._cache_viewport_size: tuple[int, int] | None = None
         self._cache_anim_frame: int | None = None
+        # Visibility bitmap - computed once per cache rebuild, reused for player overlays
+        # Maps (level_x, level_y) -> True if visible from player position
+        self._cached_visibility: dict[tuple[int, int], bool] | None = None
 
     def _get_viewport(self) -> Viewport:
         """Get viewport sized to current terminal dimensions."""
@@ -185,12 +188,13 @@ class TerminalUI:
         if not cache_valid:
             self._cached_map = []
             self._cached_rows = []
+            self._cached_visibility = {}
             for vy in range(viewport.height):
                 row: list[str] = []
                 for vx in range(viewport.width):
                     lx = cam_x + vx
                     ly = cam_y + vy
-                    char = self._get_map_cell_char(
+                    char, is_visible = self._get_map_cell_char_with_visibility(
                         lx,
                         ly,
                         level,
@@ -199,6 +203,8 @@ class TerminalUI:
                         other_levels or {},
                     )
                     row.append(char)
+                    # Store visibility for player overlay lookups
+                    self._cached_visibility[(lx, ly)] = is_visible
                 self._cached_map.append(row)
                 self._cached_rows.append("".join(row))
             self._cache_player_pos = (player_x, player_y)
@@ -289,7 +295,7 @@ class TerminalUI:
 
         print("\n".join(output), end="", flush=True)
 
-    def _get_map_cell_char(
+    def _get_map_cell_char_with_visibility(
         self,
         x: int,
         y: int,
@@ -297,8 +303,13 @@ class TerminalUI:
         player_x: int,
         player_y: int,
         other_levels: dict[str, Level],
-    ) -> str:
-        """Get the map character at a cell (no players - cacheable)."""
+    ) -> tuple[str, bool]:
+        """Get the map character at a cell and whether it's visible.
+
+        Returns:
+            Tuple of (rendered_char, is_visible) where is_visible indicates
+            direct line of sight (not portal view) for player overlay lookups.
+        """
         # Calculate distance from player
         dx = x - player_x
         dy = y - player_y
@@ -306,7 +317,7 @@ class TerminalUI:
 
         # Beyond visibility range - show empty
         if distance > LIGHT_FADING_RADIUS:
-            return " "
+            return (" ", False)
 
         # Check for see-through portal view before normal LOS check
         portal_result = self._check_portal_view(
@@ -314,17 +325,19 @@ class TerminalUI:
         )
         if portal_result:
             portal_level, portal_x, portal_y, total_distance = portal_result
-            return self._render_tile_with_portal_tint(
+            char = self._render_tile_with_portal_tint(
                 portal_level.get_tile(portal_x, portal_y), total_distance, portal_x
             )
+            # Portal view doesn't count as direct visibility for players
+            return (char, False)
 
         # Check line of sight - walls block light
         if not self._has_line_of_sight(player_x, player_y, x, y, level):
-            return " "
+            return (" ", False)
 
         # Get tile from level and render with lighting
         tile_char = level.get_tile(x, y)
-        return self._render_tile_with_lighting(tile_char, distance, x)
+        return (self._render_tile_with_lighting(tile_char, distance, x), True)
 
     def _compute_player_overlays(
         self,
@@ -361,7 +374,7 @@ class TerminalUI:
             if not (0 <= vx < viewport.width and 0 <= vy < viewport.height):
                 continue
 
-            # Check distance and LOS
+            # Check distance and visibility from cached bitmap
             dx = p.x - player_x
             dy = p.y - player_y
             distance = math.sqrt(dx * dx + dy * dy)
@@ -369,7 +382,12 @@ class TerminalUI:
             if distance > LIGHT_FADING_RADIUS:
                 continue
 
-            if not self._has_line_of_sight(player_x, player_y, p.x, p.y, level):
+            # Use cached visibility bitmap instead of recalculating LOS
+            if self._cached_visibility is not None:
+                if not self._cached_visibility.get((p.x, p.y), False):
+                    continue
+            elif not self._has_line_of_sight(player_x, player_y, p.x, p.y, level):
+                # Fallback if cache not available (shouldn't happen normally)
                 continue
 
             # Render with distance-based lighting
@@ -413,13 +431,17 @@ class TerminalUI:
                     target_level = level
                     target_level_name = current_level
 
-                # Check if player can see the portal
+                # Check if player can see the portal using cached visibility
                 door_dx = door.x - player_x
                 door_dy = door.y - player_y
                 door_dist = math.sqrt(door_dx * door_dx + door_dy * door_dy)
                 if door_dist > LIGHT_FADING_RADIUS:
                     continue
-                if not self._has_line_of_sight(
+                # Use cached visibility bitmap for door visibility check
+                if self._cached_visibility is not None:
+                    if not self._cached_visibility.get((door.x, door.y), False):
+                        continue
+                elif not self._has_line_of_sight(
                     player_x, player_y, door.x, door.y, level
                 ):
                     continue
