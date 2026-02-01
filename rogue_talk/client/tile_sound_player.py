@@ -1,18 +1,23 @@
-"""Tile sound effects management."""
+"""Tile sound effects management with dedicated audio output stream."""
 
 from __future__ import annotations
 
 import math
+import os
 import threading
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 import numpy.typing as npt
+import sounddevice as sd
 
 from ..audio.sound_loader import SoundCache
 from ..common import tiles
-from ..common.constants import FRAME_SIZE
+from ..common.constants import CHANNELS, FRAME_SIZE, SAMPLE_RATE
+
+# Set application name for PulseAudio/PipeWire
+os.environ.setdefault("PULSE_PROP_application.name", "rogue_talk")
 
 if TYPE_CHECKING:
     from .level import Level
@@ -44,13 +49,45 @@ class LoopingSound:
 
 
 class TileSoundPlayer:
-    """Manages tile sound effects (walking and ambient sounds)."""
+    """Manages tile sound effects with dedicated audio output stream."""
 
     def __init__(self, sound_cache: SoundCache) -> None:
         self.sound_cache = sound_cache
         self._lock = threading.Lock()
         self._one_shots: list[OneShotSound] = []
         self._ambient_sounds: dict[str, LoopingSound] = {}
+        self._stream: sd.OutputStream | None = None
+
+    def start(self) -> None:
+        """Start the tile sound output stream."""
+        # Set stream name for PulseAudio/PipeWire
+        os.environ["PULSE_PROP_media.name"] = "environment"
+        self._stream = sd.OutputStream(
+            samplerate=SAMPLE_RATE,
+            channels=CHANNELS,
+            dtype=np.float32,
+            blocksize=FRAME_SIZE,
+            callback=self._audio_callback,
+        )
+        self._stream.start()
+
+    def stop(self) -> None:
+        """Stop the tile sound output stream."""
+        if self._stream:
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
+
+    def _audio_callback(
+        self,
+        outdata: npt.NDArray[np.float32],
+        frames: int,
+        time_info: Any,
+        status: sd.CallbackFlags,
+    ) -> None:
+        """Sounddevice callback - get mixed tile sounds."""
+        mixed = self._get_mixed_frame()
+        outdata[:, 0] = mixed
 
     def on_player_move(self, x: int, y: int, level: Level) -> None:
         """Called when player moves to a new tile. Plays walking sound.
@@ -142,7 +179,7 @@ class TileSoundPlayer:
                             current_volume=0.0,
                         )
 
-    def get_mixed_frame(self) -> npt.NDArray[np.float32]:
+    def _get_mixed_frame(self) -> npt.NDArray[np.float32]:
         """Get the next frame of mixed tile sounds.
 
         Returns:
@@ -198,16 +235,16 @@ class TileSoundPlayer:
                 if looping.current_volume < 0.001:
                     continue
 
-                # Copy samples with looping
-                pos = looping.position
+                # Vectorized looping sample copy (replaces per-sample Python loop)
                 data = looping.data
                 data_len = len(data)
+                pos = looping.position
 
-                for sample_idx in range(FRAME_SIZE):
-                    mixed[sample_idx] += data[pos % data_len] * looping.current_volume
-                    pos += 1
+                # Build index array for where to read from (handles wrap-around)
+                indices = (np.arange(FRAME_SIZE) + pos) % data_len
+                mixed += data[indices] * looping.current_volume
 
-                looping.position = pos % data_len
+                looping.position = (pos + FRAME_SIZE) % data_len
 
             # Remove faded out sounds
             for filename in sounds_to_remove:

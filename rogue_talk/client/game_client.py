@@ -15,6 +15,16 @@ from aiortc import RTCPeerConnection, RTCSessionDescription
 from blessed import Terminal
 from blessed.keyboard import Keystroke
 
+# Set up logging to file (doesn't interfere with terminal UI)
+# Use PID in filename so multiple clients on same machine have separate logs
+import os as _os
+
+_logger = logging.getLogger(__name__)
+_debug_handler = logging.FileHandler(f"/tmp/rogue_talk_client_{_os.getpid()}.log")
+_debug_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+_logger.addHandler(_debug_handler)
+_logger.setLevel(logging.DEBUG)
+
 from ..audio.sound_loader import SoundCache
 from ..audio.webrtc_tracks import AudioCaptureTrack, AudioPlaybackTrack
 from ..common import tiles as tile_defs
@@ -23,6 +33,7 @@ from ..common.protocol import (
     AuthResult,
     MessageType,
     PlayerInfo,
+    deserialize_audio_track_map,
     deserialize_auth_challenge,
     deserialize_auth_result,
     deserialize_door_transition,
@@ -34,6 +45,7 @@ from ..common.protocol import (
     deserialize_position_ack,
     deserialize_server_hello,
     deserialize_webrtc_answer,
+    deserialize_webrtc_offer,
     deserialize_world_state,
     read_message,
     serialize_auth_response,
@@ -42,6 +54,7 @@ from ..common.protocol import (
     serialize_level_pack_request,
     serialize_mute_status,
     serialize_position_update,
+    serialize_webrtc_answer,
     serialize_webrtc_offer,
     write_message,
 )
@@ -91,7 +104,10 @@ class GameClient:
         self.webrtc_connected: bool = False
         # WebRTC audio
         self.audio_capture_track: AudioCaptureTrack | None = None
-        self.audio_playback_track: AudioPlaybackTrack | None = None
+        # Multiple playback tracks: source_player_id -> AudioPlaybackTrack
+        self.audio_playback_tracks: dict[int, AudioPlaybackTrack] = {}
+        # Track MID -> source_player_id mapping (from server)
+        self._track_map: dict[str, int] = {}
         self.running = False
         self._needs_render = True  # Flag to track when re-render is needed
         self._last_render_time = 0.0  # For periodic updates (mic level, animations)
@@ -302,9 +318,6 @@ class GameClient:
         self.audio_capture_track = AudioCaptureTrack()
         pc.addTrack(self.audio_capture_track)
 
-        # Create audio playback handler for receiving voice
-        self.audio_playback_track = AudioPlaybackTrack()
-
         # Create data channel for game messages
         self.data_channel = pc.createDataChannel("game", ordered=True)
 
@@ -323,10 +336,14 @@ class GameClient:
         @pc.on("track")
         def on_track(track: Any) -> None:
             if track.kind == "audio":
-                print("Received audio track from server")
-                if self.audio_playback_track:
-                    self.audio_playback_track.set_track(track)
-                    asyncio.create_task(self.audio_playback_track.start())
+                _logger.debug(f"on_track fired, track_map={self._track_map}")
+                # Find which transceiver this track belongs to
+                source_player_id = self._get_source_player_for_track(track)
+                if source_player_id is not None:
+                    _logger.debug(f"Matched track to player {source_player_id}")
+                    self._setup_playback_track(source_player_id, track)
+                else:
+                    _logger.debug("Could not match track to player")
 
         # Handle connection state changes
         @pc.on("connectionstatechange")
@@ -384,6 +401,66 @@ class GameClient:
 
         return True
 
+    def _get_source_player_for_track(self, track: Any) -> int | None:
+        """Find the source player ID for an incoming track using the track map."""
+        if not self.peer_connection:
+            return None
+
+        # Find the transceiver that has this track as its receiver's track
+        for transceiver in self.peer_connection.getTransceivers():
+            if transceiver.receiver and transceiver.receiver.track == track:
+                mid = transceiver.mid
+                if mid and mid in self._track_map:
+                    return self._track_map[mid]
+        return None
+
+    def _setup_playback_track(self, source_player_id: int, track: Any) -> None:
+        """Set up a playback track for a source player."""
+        # Create new playback track if needed
+        if source_player_id not in self.audio_playback_tracks:
+            playback = AudioPlaybackTrack(source_player_id)
+            self.audio_playback_tracks[source_player_id] = playback
+
+        # Set the track and start receiving
+        playback = self.audio_playback_tracks[source_player_id]
+        playback.set_track(track)
+        asyncio.create_task(playback.start())
+
+        # Update AudioPlayback to know about this track
+        if self.audio_playback:
+            self.audio_playback.add_playback_track(source_player_id, playback)
+
+    async def _handle_renegotiation_offer(self, offer_sdp: str) -> None:
+        """Handle a renegotiation offer from the server."""
+        if not self.peer_connection:
+            return
+
+        try:
+            _logger.debug("Processing renegotiation offer")
+            # Set remote description (the new offer)
+            await self.peer_connection.setRemoteDescription(
+                RTCSessionDescription(sdp=offer_sdp, type="offer")
+            )
+
+            # Create and set answer
+            answer = await self.peer_connection.createAnswer()
+            await self.peer_connection.setLocalDescription(answer)
+
+            # Send answer back to server via data channel
+            answer_sdp = (
+                self.peer_connection.localDescription.sdp
+                if self.peer_connection.localDescription
+                else ""
+            )
+            self._send_data_channel_message(
+                MessageType.WEBRTC_ANSWER,
+                serialize_webrtc_answer(answer_sdp),
+            )
+            _logger.debug("Sent renegotiation answer")
+        except Exception as e:
+            _logger.error(f"Renegotiation failed: {e}")
+            print(f"Renegotiation failed: {e}")
+
     async def run(self) -> None:
         """Main client loop."""
         self.running = True
@@ -425,9 +502,10 @@ class GameClient:
                 pass
             await self._stop_audio()
 
-            # Stop audio playback track
-            if self.audio_playback_track:
-                await self.audio_playback_track.stop()
+            # Stop all audio playback tracks
+            for playback in self.audio_playback_tracks.values():
+                await playback.stop()
+            self.audio_playback_tracks.clear()
 
             # Close WebRTC peer connection
             if self.peer_connection:
@@ -473,6 +551,10 @@ class GameClient:
         if msg_type == MessageType.WORLD_STATE:
             world_state = deserialize_world_state(payload)
             self.players = world_state.players
+            # Update audio playback with player names
+            if self.audio_playback:
+                names = {p.player_id: p.name for p in self.players}
+                self.audio_playback.update_player_names(names)
             # Only update our position from server if no pending moves
             # (otherwise we'd rubber-band while moves are in-flight)
             if not self._pending_moves:
@@ -551,6 +633,17 @@ class GameClient:
             # Handle level files data (for cached level loading)
             if self._pending_files_future:
                 self._pending_files_future.set_result(payload)
+
+        elif msg_type == MessageType.WEBRTC_OFFER:
+            # Renegotiation offer from server (new audio tracks)
+            _logger.debug("Received WEBRTC_OFFER for renegotiation")
+            offer_sdp = deserialize_webrtc_offer(payload)
+            await self._handle_renegotiation_offer(offer_sdp)
+
+        elif msg_type == MessageType.AUDIO_TRACK_MAP:
+            # Update track MID -> source player ID mapping
+            self._track_map = deserialize_audio_track_map(payload)
+            _logger.debug(f"Received AUDIO_TRACK_MAP: {self._track_map}")
 
     def _send_data_channel_message(self, msg_type: MessageType, payload: bytes) -> None:
         """Send a message via WebRTC data channel."""
@@ -878,12 +971,12 @@ class GameClient:
             from .audio_capture import AudioCapture
             from .audio_playback import AudioPlayback
 
-            # Start playback for tile sounds and WebRTC voice
+            # Start tile sounds (has its own output stream)
+            self._tile_sound_player.start()
+
+            # Start voice playback (per-player streams)
+            # Tracks are added dynamically via add_playback_track when they arrive
             self.audio_playback = AudioPlayback()
-            self.audio_playback.tile_sound_player = self._tile_sound_player
-            # Connect WebRTC track to audio playback (voice from server)
-            if self.audio_playback_track:
-                self.audio_playback.webrtc_track = self.audio_playback_track
             self.audio_playback.start()
 
             # Start capture - feed audio to WebRTC track
@@ -901,6 +994,7 @@ class GameClient:
             self.audio_capture.stop()
         if self.audio_playback:
             self.audio_playback.stop()
+        self._tile_sound_player.stop()
 
     async def _send_position_updates(self) -> None:
         """Send position updates from the queue to the server via data channel."""

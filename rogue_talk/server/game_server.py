@@ -17,8 +17,12 @@ from typing import Any
 
 from aiortc import RTCPeerConnection, RTCSessionDescription
 
-# Set up logging to see debug messages
+# Set up logging to file (doesn't interfere with terminal)
 logger = logging.getLogger(__name__)
+_debug_handler = logging.FileHandler("/tmp/rogue_talk_server.log")
+_debug_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+logger.addHandler(_debug_handler)
+logger.setLevel(logging.DEBUG)
 
 from ..audio.webrtc_tracks import ServerAudioRelay, ServerOutboundTrack
 from ..common import tiles as tile_defs
@@ -36,6 +40,7 @@ from ..common.protocol import (
     deserialize_webrtc_ice,
     deserialize_webrtc_offer,
     read_message,
+    serialize_audio_track_map,
     serialize_auth_challenge,
     serialize_auth_result,
     serialize_door_transition,
@@ -263,13 +268,21 @@ class GameServer:
         # Start audio routing task
         audio_task = asyncio.create_task(self._audio_routing_loop())
 
+        # Start renegotiation task for dynamic track management
+        renegotiation_task = asyncio.create_task(self._renegotiation_loop())
+
         try:
             async with server:
                 await server.serve_forever()
         finally:
             audio_task.cancel()
+            renegotiation_task.cancel()
             try:
                 await audio_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await renegotiation_task
             except asyncio.CancelledError:
                 pass
 
@@ -279,37 +292,146 @@ class GameServer:
             await asyncio.sleep(AUDIO_ROUTE_INTERVAL)
             await self._route_all_audio()
 
+    async def _renegotiation_loop(self) -> None:
+        """Periodically check for players needing WebRTC renegotiation."""
+        # Check every 500ms for players needing renegotiation
+        while True:
+            await asyncio.sleep(0.5)
+            for player in list(self.players.values()):
+                if player.needs_renegotiation and player.webrtc_connected:
+                    await self._renegotiate_player(player)
+
+    async def _renegotiate_player(self, player: Player) -> None:
+        """Perform WebRTC renegotiation for a player to add/remove tracks."""
+        if player.peer_connection is None:
+            return
+
+        player.needs_renegotiation = False
+        pc = player.peer_connection
+
+        # Add new tracks that aren't in the peer connection yet
+        for source_id, track in player.outbound_tracks.items():
+            # Check if track is already added by looking at transceivers
+            track_in_pc = False
+            for transceiver in pc.getTransceivers():
+                if transceiver.sender and transceiver.sender.track == track:
+                    track_in_pc = True
+                    break
+
+            if not track_in_pc:
+                # Add the track to the peer connection
+                pc.addTrack(track)
+                logger.debug(
+                    f"Added track {source_id} to peer connection for {player.name}"
+                )
+
+        # Create a new offer
+        try:
+            offer = await pc.createOffer()
+            await pc.setLocalDescription(offer)
+
+            # Build track map AFTER setLocalDescription (MIDs are now assigned)
+            track_map: dict[str, int] = {}
+            for transceiver in pc.getTransceivers():
+                if transceiver.sender and transceiver.sender.track and transceiver.mid:
+                    for source_id, track in player.outbound_tracks.items():
+                        if transceiver.sender.track == track:
+                            track_map[transceiver.mid] = source_id
+                            break
+
+            # Send track mapping FIRST so client has it before processing the offer
+            # (on_track fires during setRemoteDescription)
+            await self._send_to_player(
+                player,
+                MessageType.AUDIO_TRACK_MAP,
+                serialize_audio_track_map(track_map),
+            )
+
+            # Then send the offer via data channel
+            offer_sdp = pc.localDescription.sdp if pc.localDescription else ""
+            from ..common.protocol import serialize_webrtc_offer
+
+            await self._send_to_player(
+                player,
+                MessageType.WEBRTC_OFFER,
+                serialize_webrtc_offer(offer_sdp),
+            )
+
+            logger.debug(
+                f"Sent renegotiation offer to {player.name} with {len(track_map)} tracks"
+            )
+        except Exception as e:
+            logger.error(f"Renegotiation failed for {player.name}: {e}")
+
     async def _route_all_audio(self) -> None:
         """Route audio frames from all players to their recipients."""
-        for player in list(self.players.values()):
-            if not player.webrtc_connected or player.audio_relay is None:
-                continue
-            if player.is_muted:
-                continue
+        # Track which source players are currently in range of each recipient
+        # recipient_id -> set of source_ids that should have tracks
+        needed_tracks: dict[int, set[int]] = {
+            p.id: set() for p in self.players.values()
+        }
 
-            # Get recipients based on proximity (calculate once per player)
-            recipients = get_audio_recipients(player, self.players)
-            if not recipients:
-                # No recipients, drain queue to prevent buildup
-                while player.audio_relay.get_audio_frame() is not None:
+        for source in list(self.players.values()):
+            if not source.webrtc_connected or source.audio_relay is None:
+                continue
+            if source.is_muted:
+                # Drain queue even if muted to prevent buildup
+                while source.audio_relay.get_audio_frame() is not None:
                     pass
                 continue
 
-            # Drain ALL available frames from this player
+            # Get recipients based on proximity (calculate once per source)
+            recipients = get_audio_recipients(source, self.players)
+            if not recipients:
+                # No recipients, drain queue to prevent buildup
+                while source.audio_relay.get_audio_frame() is not None:
+                    pass
+                continue
+
+            # Record which tracks are needed
+            for recipient, _volume in recipients:
+                if recipient.id in needed_tracks:
+                    needed_tracks[recipient.id].add(source.id)
+
+            # Drain ALL available frames from this source
             while True:
-                frame = player.audio_relay.get_audio_frame()
+                frame = source.audio_relay.get_audio_frame()
                 if frame is None:
                     break
 
                 for recipient, volume in recipients:
-                    if (
-                        not recipient.webrtc_connected
-                        or recipient.outbound_audio is None
-                    ):
+                    if not recipient.webrtc_connected:
                         continue
+
+                    # Get or create track for this source->recipient pair
+                    track = recipient.outbound_tracks.get(source.id)
+                    if track is None:
+                        # Need to create a new track - will be added during renegotiation
+                        track = ServerOutboundTrack(source.id)
+                        recipient.outbound_tracks[source.id] = track
+                        recipient.needs_renegotiation = True
+                        logger.debug(
+                            f"Created track for {source.name} -> {recipient.name}"
+                        )
+
                     # Scale audio by volume and send
                     scaled_frame = frame * volume
-                    recipient.outbound_audio.send_audio(scaled_frame)
+                    track.send_audio(scaled_frame)
+
+        # Remove tracks for players no longer in range
+        for recipient in list(self.players.values()):
+            if not recipient.webrtc_connected:
+                continue
+            sources_in_range = needed_tracks.get(recipient.id, set())
+            tracks_to_remove = [
+                src_id
+                for src_id in recipient.outbound_tracks
+                if src_id not in sources_in_range
+            ]
+            for src_id in tracks_to_remove:
+                del recipient.outbound_tracks[src_id]
+                recipient.needs_renegotiation = True
+                logger.debug(f"Removed track for player {src_id} -> {recipient.name}")
 
     async def handle_client(self, reader: StreamReader, writer: StreamWriter) -> None:
         player: Player | None = None
@@ -471,10 +593,8 @@ class GameServer:
             pc = RTCPeerConnection()
             player.peer_connection = pc
 
-            # Create outbound audio track for sending audio to this player
-            outbound_track = ServerOutboundTrack()
-            player.outbound_audio = outbound_track
-            pc.addTrack(outbound_track)
+            # No initial outbound tracks - they'll be added when other players
+            # come into audio range and renegotiation will occur
 
             # Create audio relay for receiving audio from this player
             audio_relay = ServerAudioRelay(player_id)
@@ -938,6 +1058,18 @@ class GameServer:
 
         elif msg_type == MessageType.PONG:
             player.last_pong_time = time.monotonic()
+
+        elif msg_type == MessageType.WEBRTC_ANSWER:
+            # Handle renegotiation answer from client
+            answer_sdp = deserialize_webrtc_offer(payload)  # Same format as offer
+            if player.peer_connection:
+                try:
+                    await player.peer_connection.setRemoteDescription(
+                        RTCSessionDescription(sdp=answer_sdp, type="answer")
+                    )
+                    logger.debug(f"Set renegotiation answer from {player.name}")
+                except Exception as e:
+                    logger.error(f"Failed to set answer from {player.name}: {e}")
 
     async def _send_world_state(self, player: Player) -> None:
         """Send current world state to a specific player via data channel."""

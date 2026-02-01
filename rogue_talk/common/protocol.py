@@ -32,6 +32,7 @@ class MessageType(enum.IntEnum):
     WEBRTC_OFFER = 0x40  # Client -> Server: SDP offer
     WEBRTC_ANSWER = 0x41  # Server -> Client: SDP answer
     WEBRTC_ICE = 0x42  # Bidirectional: ICE candidate exchange
+    AUDIO_TRACK_MAP = 0x43  # Server -> Client: Maps track MIDs to player IDs
 
 
 @dataclass
@@ -441,3 +442,22 @@ def deserialize_webrtc_ice(data: bytes) -> tuple[str | None, int | None, str]:
     offset += 4
     candidate = data[offset : offset + cand_len].decode("utf-8")
     return sdp_mid, sdp_mline_index, candidate
+
+
+# AUDIO_TRACK_MAP: Maps track MIDs to source player IDs
+def serialize_audio_track_map(track_map: dict[str, int]) -> bytes:
+    """Serialize a mapping of track MID -> source player ID."""
+    import json
+
+    json_bytes = json.dumps(track_map).encode("utf-8")
+    return struct.pack(">I", len(json_bytes)) + json_bytes
+
+
+def deserialize_audio_track_map(data: bytes) -> dict[str, int]:
+    """Deserialize a mapping of track MID -> source player ID."""
+    import json
+    from typing import cast
+
+    json_len = struct.unpack(">I", data[:4])[0]
+    json_bytes = data[4 : 4 + json_len]
+    return cast(dict[str, int], json.loads(json_bytes.decode("utf-8")))
