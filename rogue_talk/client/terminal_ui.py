@@ -319,7 +319,13 @@ class TerminalUI:
         if distance > LIGHT_FADING_RADIUS:
             return (" ", False)
 
-        # Check for see-through portal view before normal LOS check
+        # Check direct line of sight first (most cells have this - fast path)
+        if self._has_line_of_sight(player_x, player_y, x, y, level):
+            # Direct visibility - render normally
+            tile_char = level.get_tile(x, y)
+            return (self._render_tile_with_lighting(tile_char, distance, x), True)
+
+        # No direct LOS - check if viewing through a see-through portal
         portal_result = self._check_portal_view(
             x, y, player_x, player_y, level, other_levels
         )
@@ -331,13 +337,8 @@ class TerminalUI:
             # Portal view doesn't count as direct visibility for players
             return (char, False)
 
-        # Check line of sight - walls block light
-        if not self._has_line_of_sight(player_x, player_y, x, y, level):
-            return (" ", False)
-
-        # Get tile from level and render with lighting
-        tile_char = level.get_tile(x, y)
-        return (self._render_tile_with_lighting(tile_char, distance, x), True)
+        # Blocked by wall or other obstacle
+        return (" ", False)
 
     def _compute_player_overlays(
         self,
@@ -584,23 +585,17 @@ class TerminalUI:
         player_y: int,
         level: Level,
         other_levels: dict[str, Level],
-        depth: int = 0,
-        accumulated_distance: float = 0.0,
     ) -> tuple[Level, int, int, float] | None:
         """Check if viewing through a see-through portal to see a target cell.
 
         Traces line of sight from player to target. If a see-through portal is
         encountered, returns the mapped position in the target level.
-        Recursively checks for chained portals up to a maximum depth.
+        Only checks one portal deep (no recursive chaining).
 
         Returns:
             Tuple of (target_level, mapped_x, mapped_y, total_distance) if viewing
             through a portal, or None if not.
         """
-        # Limit portal chain depth to prevent infinite loops
-        if depth > 5:
-            return None
-
         if not level.doors:
             return None
 
@@ -658,12 +653,10 @@ class TerminalUI:
                 ):
                     return None
 
-                # Calculate distance so far
+                # Calculate total distance through portal
                 dist_to_portal = math.sqrt((x - player_x) ** 2 + (y - player_y) ** 2)
                 dist_from_portal = math.sqrt(offset_x**2 + offset_y**2)
-                total_distance = (
-                    accumulated_distance + dist_to_portal + dist_from_portal
-                )
+                total_distance = dist_to_portal + dist_from_portal
 
                 return (target_level, mapped_x, mapped_y, total_distance)
 
