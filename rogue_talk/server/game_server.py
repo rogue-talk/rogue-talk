@@ -55,7 +55,7 @@ from ..common.protocol import (
     serialize_world_state,
     write_message,
 )
-from .audio_router import clear_recipient_cache, get_audio_recipients
+from .audio_router import clear_recipient_cache, get_audio_recipients, get_volume
 from .level import DoorInfo, Level
 from .player import Player
 from .storage import PlayerStorage
@@ -321,6 +321,8 @@ class GameServer:
             if not track_in_pc:
                 # Add the track to the peer connection
                 pc.addTrack(track)
+                # Activate the track so audio routing starts queueing to it
+                track.activate()
                 logger.debug(
                     f"Added track {source_id} to peer connection for {player.name}"
                 )
@@ -363,14 +365,59 @@ class GameServer:
         except Exception as e:
             logger.error(f"Renegotiation failed for {player.name}: {e}")
 
+    def _setup_initial_tracks(self, player: Player) -> None:
+        """Set up audio tracks for a newly connected player.
+
+        Creates bidirectional tracks between the new player and any
+        existing players within audio range.
+        """
+        for other in self.players.values():
+            if other.id == player.id or not other.webrtc_connected:
+                continue
+
+            # Check if in audio range
+            dx = other.x - player.x
+            dy = other.y - player.y
+            volume = get_volume(dx, dy)
+            if volume <= 0.0:
+                continue
+
+            # Create track: other -> player (so player can hear other)
+            if other.id not in player.outbound_tracks:
+                track = ServerOutboundTrack(other.id)
+                player.outbound_tracks[other.id] = track
+                player.needs_renegotiation = True
+                logger.debug(f"Initial track: {other.name} -> {player.name}")
+
+            # Create track: player -> other (so other can hear player)
+            if player.id not in other.outbound_tracks:
+                track = ServerOutboundTrack(player.id)
+                other.outbound_tracks[player.id] = track
+                other.needs_renegotiation = True
+                logger.debug(f"Initial track: {player.name} -> {other.name}")
+
     async def _route_all_audio(self) -> None:
         """Route audio frames from all players to their recipients."""
-        # Track which source players are currently in range of each recipient
+        # First, calculate which source players are in range of each recipient
+        # (regardless of whether they're currently sending audio or muted)
         # recipient_id -> set of source_ids that should have tracks
-        needed_tracks: dict[int, set[int]] = {
+        sources_in_range: dict[int, set[int]] = {
             p.id: set() for p in self.players.values()
         }
 
+        for source in list(self.players.values()):
+            if not source.webrtc_connected:
+                continue
+            # Calculate recipients based on proximity only (ignore mute status)
+            # We keep tracks for muted players so audio works when they unmute
+            for recipient in self.players.values():
+                if recipient.id == source.id or not recipient.webrtc_connected:
+                    continue
+                volume = get_volume(recipient.x - source.x, recipient.y - source.y)
+                if volume > 0.0 and recipient.id in sources_in_range:
+                    sources_in_range[recipient.id].add(source.id)
+
+        # Now route audio frames from players who have audio to send
         for source in list(self.players.values()):
             if not source.webrtc_connected or source.audio_relay is None:
                 continue
@@ -387,11 +434,6 @@ class GameServer:
                 while source.audio_relay.get_audio_frame() is not None:
                     pass
                 continue
-
-            # Record which tracks are needed
-            for recipient, _volume in recipients:
-                if recipient.id in needed_tracks:
-                    needed_tracks[recipient.id].add(source.id)
 
             # Drain ALL available frames from this source
             while True:
@@ -422,11 +464,9 @@ class GameServer:
         for recipient in list(self.players.values()):
             if not recipient.webrtc_connected:
                 continue
-            sources_in_range = needed_tracks.get(recipient.id, set())
+            in_range = sources_in_range.get(recipient.id, set())
             tracks_to_remove = [
-                src_id
-                for src_id in recipient.outbound_tracks
-                if src_id not in sources_in_range
+                src_id for src_id in recipient.outbound_tracks if src_id not in in_range
             ]
             for src_id in tracks_to_remove:
                 del recipient.outbound_tracks[src_id]
@@ -639,8 +679,6 @@ class GameServer:
                 state = pc.connectionState
                 if state in ("failed", "closed", "disconnected"):
                     connection_closed.set()
-                elif state == "connected":
-                    player.webrtc_connected = True
 
             # Set remote description and create answer
             await pc.setRemoteDescription(
@@ -710,8 +748,22 @@ class GameServer:
             # Notify others about new player (via data channel)
             await self._broadcast_player_joined(player)
 
-            # Send initial world state (via data channel)
-            await self._send_world_state(player)
+            # Broadcast world state to all players so everyone knows the new
+            # player's position (PLAYER_JOINED only contains id and name)
+            await self._broadcast_world_state()
+
+            # Clear audio recipient cache so new player is included in routing
+            clear_recipient_cache()
+
+            # Set up initial audio tracks with nearby players
+            # (must be after data channel is ready for renegotiation to work)
+            self._setup_initial_tracks(player)
+
+            # Trigger immediate renegotiation for players that need it
+            # (don't wait for the 500ms renegotiation loop)
+            for p in list(self.players.values()):
+                if p.needs_renegotiation and p.webrtc_connected:
+                    await self._renegotiate_player(p)
 
             # Start ping loop to detect disconnects
             ping_task = asyncio.create_task(self._ping_loop(player, connection_closed))

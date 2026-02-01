@@ -264,14 +264,20 @@ class ServerOutboundTrack(MediaStreamTrack):
         self._queue: asyncio.Queue[npt.NDArray[np.float32]] = asyncio.Queue(maxsize=50)
         self._timestamp = 0
         self._sample_rate = SAMPLE_RATE
-        self._frame_count = 0
+        self._active = False  # Only queue audio when added to peer connection
+
+    def activate(self) -> None:
+        """Mark track as active (added to peer connection). Audio will now be queued."""
+        self._active = True
 
     def send_audio(self, pcm_data: npt.NDArray[np.float32]) -> None:
         """Queue audio data to send to the client."""
+        if not self._active:
+            return  # Don't queue until track is in peer connection
         try:
             self._queue.put_nowait(pcm_data.copy())
         except asyncio.QueueFull:
-            pass
+            pass  # Drop frame if queue is full
 
     async def recv(self) -> Any:
         """Called by aiortc to get the next audio frame to send."""
@@ -297,7 +303,6 @@ class ServerOutboundTrack(MediaStreamTrack):
             frame.planes[0].update(pcm_int16.tobytes())
 
             self._timestamp += len(pcm_int16)
-            self._frame_count += 1
             return frame
         except asyncio.CancelledError:
             raise
