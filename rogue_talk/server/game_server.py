@@ -413,8 +413,10 @@ class GameServer:
                 pc.addTrack(track)
                 # Activate the track so audio routing starts queueing to it
                 track.activate()
+                source_player = self.players.get(source_id)
+                source_name = source_player.name if source_player else f"#{source_id}"
                 logger.debug(
-                    f"Added track {source_id} to peer connection for {player.name}"
+                    f"Added track {source_name} -> {player.name} to peer connection"
                 )
 
         # Create a new offer
@@ -577,7 +579,9 @@ class GameServer:
             for src_id in tracks_to_remove:
                 del recipient.outbound_tracks[src_id]
                 recipient.needs_renegotiation = True
-                logger.debug(f"Removed track for player {src_id} -> {recipient.name}")
+                src_player = self.players.get(src_id)
+                src_name = src_player.name if src_player else f"#{src_id}"
+                logger.debug(f"Removed track {src_name} -> {recipient.name}")
 
     async def handle_client(self, reader: StreamReader, writer: StreamWriter) -> None:
         player: Player | None = None

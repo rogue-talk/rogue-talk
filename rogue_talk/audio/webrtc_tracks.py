@@ -322,12 +322,17 @@ class ServerOutboundTrack(MediaStreamTrack):
         self._active = True
 
     def send_audio(self, pcm_data: npt.NDArray[np.float32]) -> None:
-        """Queue audio data to send to the client."""
+        """Queue audio data to send to the client.
+
+        Note: Caller is expected to pass a buffer that won't be modified after
+        this call. In practice, this is always true because the audio routing
+        loop creates a new scaled_frame for each recipient.
+        """
         if not self._active:
             return  # Don't queue until track is in peer connection
         self._frame_count += 1
         try:
-            self._queue.put_nowait(pcm_data.copy())
+            self._queue.put_nowait(pcm_data)
         except asyncio.QueueFull:
             self._drop_count += 1
         if self._frame_count % 500 == 0:
