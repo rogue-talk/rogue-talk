@@ -224,6 +224,75 @@
         }).config.build.wrapper
       );
 
+      checks = forAllSystems (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          python = pkgs.python312.override {
+            packageOverrides = self: super: {
+              av = super.av.override {
+                ffmpeg-headless = pkgs.ffmpeg;
+              };
+              opuslib_next = self.buildPythonPackage {
+                pname = "opuslib_next";
+                version = "1.1.5";
+                src = pkgs.fetchPypi {
+                  pname = "opuslib_next";
+                  version = "1.1.5";
+                  sha256 = "6aec1015f25f799794d217601c74ea0fae8fd65d752578cb163fd2338ed075ce";
+                };
+                pyproject = true;
+                build-system = [ self.poetry-core ];
+                doCheck = false;
+              };
+            };
+          };
+          mypy = pkgs.writeShellScriptBin "mypy" ''
+            exec ${
+              python.withPackages (ps: [
+                ps.mypy
+                ps.numpy
+                ps.blessed
+                ps.aiortc
+                ps.aiohttp
+              ])
+            }/bin/mypy "$@"
+          '';
+          treefmtEval = treefmt-nix.lib.evalModule pkgs {
+            projectRootFile = "flake.nix";
+            programs.nixfmt.enable = true;
+            programs.ruff-format.enable = true;
+            programs.mypy = {
+              enable = true;
+              package = mypy;
+              directories."rogue_talk" = { };
+            };
+          };
+          pythonEnv = python.withPackages (ps: [
+            ps.blessed
+            ps.soundfile
+            ps.opuslib_next
+            ps.numpy
+            ps.cryptography
+            ps.aiortc
+            ps.aiohttp
+            ps.pytest
+            ps.pytest-asyncio
+            ps.pytest-cov
+            ps.hypothesis
+          ]);
+        in
+        {
+          formatting = treefmtEval.config.build.check self;
+          pytest = pkgs.runCommand "pytest" { nativeBuildInputs = [ pythonEnv ]; } ''
+            export LD_LIBRARY_PATH="${pkgs.libopus}/lib:${pkgs.libsndfile}/lib:${pkgs.libvpx}/lib:${pkgs.ffmpeg}/lib"
+            cd ${self}
+            pytest
+            touch $out
+          '';
+        }
+      );
+
       nixosModules.default =
         {
           config,
