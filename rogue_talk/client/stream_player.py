@@ -62,11 +62,20 @@ class StreamPlayer:
         self._streams: dict[str, ActiveStream] = {}  # url -> ActiveStream
         self._stream: AudioOutputStream | None = None
         self._running = False
+        self._output_active = False
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
-        """Start the stream player output."""
+        """Start the stream player (output is created lazily when needed)."""
         if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._playback_loop, daemon=True)
+        self._thread.start()
+
+    def _ensure_output_started(self) -> None:
+        """Start the audio output if not already running."""
+        if self._output_active:
             return
         self._stream = create_output_stream(
             stream_name="radio",
@@ -74,9 +83,18 @@ class StreamPlayer:
             channels=1,
         )
         self._stream.start()
-        self._running = True
-        self._thread = threading.Thread(target=self._playback_loop, daemon=True)
-        self._thread.start()
+        self._output_active = True
+        _logger.debug("Started radio output stream")
+
+    def _stop_output(self) -> None:
+        """Stop the audio output."""
+        if not self._output_active:
+            return
+        if self._stream:
+            self._stream.stop()
+            self._stream = None
+        self._output_active = False
+        _logger.debug("Stopped radio output stream")
 
     def stop(self) -> None:
         """Stop the stream player and all streams."""
@@ -94,9 +112,7 @@ class StreamPlayer:
         if self._thread:
             self._thread.join(timeout=1.0)
             self._thread = None
-        if self._stream:
-            self._stream.stop()
-            self._stream = None
+        self._stop_output()
 
     def _playback_loop(self) -> None:
         """Background thread that generates and writes mixed audio."""
@@ -104,20 +120,33 @@ class StreamPlayer:
         # Use absolute timing to prevent drift
         next_frame_time = time.perf_counter()
 
-        while self._running and self._stream is not None:
-            # Generate the next frame
-            mixed = self._get_mixed_frame()
+        while self._running:
+            # Check if we have any active streams
+            with self._lock:
+                has_active = any(
+                    s.current_volume > 0 or s.target_volume > 0
+                    for s in self._streams.values()
+                )
 
-            # Write to output stream
-            self._stream.write(mixed)
-
-            # Sleep until next frame time (absolute timing prevents drift)
-            next_frame_time += frame_duration
-            sleep_time = next_frame_time - time.perf_counter()
-            if sleep_time > 0:
-                time.sleep(sleep_time)
-            elif sleep_time < -0.1:
-                # We're way behind - reset timing to catch up
+            if has_active:
+                self._ensure_output_started()
+                # Generate the next frame
+                mixed = self._get_mixed_frame()
+                # Write to output stream
+                if self._stream:
+                    self._stream.write(mixed)
+                # Sleep until next frame time (absolute timing prevents drift)
+                next_frame_time += frame_duration
+                sleep_time = next_frame_time - time.perf_counter()
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                elif sleep_time < -0.1:
+                    # We're way behind - reset timing to catch up
+                    next_frame_time = time.perf_counter()
+            else:
+                # No active streams - stop output and sleep longer
+                self._stop_output()
+                time.sleep(0.1)
                 next_frame_time = time.perf_counter()
 
     def update_streams(

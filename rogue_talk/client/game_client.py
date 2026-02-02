@@ -110,6 +110,8 @@ class GameClient:
         self.audio_playback_tracks: dict[int, AudioPlaybackTrack] = {}
         # Track MID -> source_player_id mapping (from server)
         self._track_map: dict[str, int] = {}
+        # Player names cached for when audio_playback is created
+        self._pending_player_names: dict[int, str] = {}
         self.running = False
         self._needs_render = True  # Flag to track when re-render is needed
         self._last_render_time = 0.0  # For periodic updates (mic level, animations)
@@ -478,6 +480,10 @@ class GameClient:
         # Start audio capture (feeds into WebRTC audio track)
         await self._start_audio()
 
+        # Initialize audio playback with our known position
+        if self.audio_playback:
+            self.audio_playback.update_positions(self.x, self.y, {})
+
         # Start position sender task (uses data channel)
         position_sender_task = asyncio.create_task(self._send_position_updates())
 
@@ -559,10 +565,18 @@ class GameClient:
         if msg_type == MessageType.WORLD_STATE:
             world_state = deserialize_world_state(payload)
             self.players = world_state.players
-            # Update audio playback with player names
+            # Update audio playback with player names and positions
+            # Always cache player names (needed before audio_playback exists)
+            names = {p.player_id: p.name for p in self.players}
+            self._pending_player_names = names
+
             if self.audio_playback:
-                names = {p.player_id: p.name for p in self.players}
                 self.audio_playback.update_player_names(names)
+                positions = {p.player_id: (p.x, p.y) for p in self.players}
+                self.audio_playback.update_positions(self.x, self.y, positions)
+                # Add any pending tracks
+                for player_id, track in self.audio_playback_tracks.items():
+                    self.audio_playback.add_playback_track(player_id, track)
             # Only update our position from server if no pending moves
             # (otherwise we'd rubber-band while moves are in-flight)
             if not self._pending_moves:
@@ -994,9 +1008,16 @@ class GameClient:
             self._stream_player.start()
 
             # Start voice playback (per-player streams)
-            # Tracks are added dynamically via add_playback_track when they arrive
             self.audio_playback = AudioPlayback()
             self.audio_playback.start()
+
+            # Set cached player names before adding tracks (so sinks get correct names)
+            if self._pending_player_names:
+                self.audio_playback.update_player_names(self._pending_player_names)
+
+            # Add any tracks that arrived before audio_playback was ready
+            for player_id, track in self.audio_playback_tracks.items():
+                self.audio_playback.add_playback_track(player_id, track)
 
             # Start capture - feed audio to WebRTC track
             self.audio_capture = AudioCapture(self._on_audio_frame)
