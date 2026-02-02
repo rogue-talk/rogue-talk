@@ -176,6 +176,11 @@
                 ps.mypy
                 ps.aiortc
                 ps.aiohttp
+                # Test dependencies
+                ps.pytest
+                ps.pytest-asyncio
+                ps.pytest-cov
+                ps.hypothesis
               ]))
               pkgs.libopus
               pkgs.libsndfile
