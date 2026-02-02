@@ -15,6 +15,9 @@ AUDIO_FULL_VOLUME_DISTANCE = 2.0  # Within this, volume = 1.0
 DEFAULT_ROOM_WIDTH = 20
 DEFAULT_ROOM_HEIGHT = 15
 
+# Movement
+MOVEMENT_TICK_INTERVAL = 0.1  # Seconds between moves (10 tiles/second max)
+
 # Network
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 7777

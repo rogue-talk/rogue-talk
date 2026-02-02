@@ -1100,6 +1100,7 @@ class GameServer:
             current_level = self.levels.get(player.current_level, self.level)
             current_tiles = self.level_tiles.get(player.current_level, tile_defs.TILES)
 
+            # Movement speed is rate-limited client-side; server only validates adjacency
             if abs(dx) <= 1 and abs(dy) <= 1:
                 # Check if position is valid and walkable using level-specific tiles
                 if 0 <= x < current_level.width and 0 <= y < current_level.height:

@@ -28,6 +28,7 @@ _logger.setLevel(logging.DEBUG)
 from ..audio.sound_loader import SoundCache
 from ..audio.webrtc_tracks import AudioCaptureTrack, AudioPlaybackTrack
 from ..common import tiles as tile_defs
+from ..common.constants import MOVEMENT_TICK_INTERVAL
 from ..common.crypto import sign_challenge
 from ..common.protocol import (
     AuthResult,
@@ -126,6 +127,8 @@ class GameClient:
         self._move_seq: int = 0
         # seq -> (dx, dy, expected_x, expected_y)
         self._pending_moves: dict[int, tuple[int, int, int, int]] = {}
+        # Movement rate limiting (matches server's MOVEMENT_TICK_INTERVAL)
+        self._last_move_time: float = 0.0
         # Temporary directory for level pack extraction
         self._temp_dir: tempfile.TemporaryDirectory[str] | None = None
         # Tile sound system
@@ -934,11 +937,17 @@ class GameClient:
 
         movement = get_movement(key)
         if movement and self.webrtc_connected and self.level and self._position_queue:
+            # Rate limit movement (max 1 tile per tick interval)
+            now = time.monotonic()
+            if now - self._last_move_time < MOVEMENT_TICK_INTERVAL:
+                return  # Too fast, ignore this input
+
             dx, dy = movement
             new_x = self.x + dx
             new_y = self.y + dy
             # Client-side prediction: apply locally and track for reconciliation
             if self.level.is_walkable(new_x, new_y):
+                self._last_move_time = now
                 self._move_seq += 1
                 seq = self._move_seq
                 self._pending_moves[seq] = (dx, dy, new_x, new_y)

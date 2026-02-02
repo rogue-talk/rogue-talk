@@ -34,5 +34,6 @@ class Player:
     current_level: str = "main"  # Name of the level the player is currently on
     public_key: bytes = b""  # Ed25519 public key for authentication
     last_pong_time: float = field(default_factory=time.monotonic)
+    last_move_time: float = 0.0  # Time of last movement (for speed limiting)
     webrtc_connected: bool = False
     needs_renegotiation: bool = False
