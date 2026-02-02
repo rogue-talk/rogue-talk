@@ -84,21 +84,24 @@ class TileSoundPlayer:
     def _playback_loop(self) -> None:
         """Background thread that generates and writes audio."""
         frame_duration = FRAME_SIZE / SAMPLE_RATE
+        # Use absolute timing to prevent drift
+        next_frame_time = time.perf_counter()
 
         while self._running and self._stream is not None:
-            start_time = time.perf_counter()
-
             # Generate the next frame
             mixed = self._get_mixed_frame()
 
             # Write to output stream
             self._stream.write(mixed)
 
-            # Sleep to maintain timing
-            elapsed = time.perf_counter() - start_time
-            sleep_time = frame_duration - elapsed
+            # Sleep until next frame time (absolute timing prevents drift)
+            next_frame_time += frame_duration
+            sleep_time = next_frame_time - time.perf_counter()
             if sleep_time > 0:
                 time.sleep(sleep_time)
+            elif sleep_time < -0.1:
+                # We're way behind - reset timing to catch up
+                next_frame_time = time.perf_counter()
 
     def on_player_move(self, x: int, y: int, level: Level) -> None:
         """Called when player moves to a new tile. Plays walking sound.
