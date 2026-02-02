@@ -297,7 +297,7 @@ class TerminalUI:
         for viewport_row in viewport_rows:
             output.append(viewport_row + clear_eol)
 
-        # Status bar
+        # Status bar (single line: mute + mic on left, players + position on right)
         clear_eol = str(self.term.clear_eol)
         output.append(clear_eol)
         local_player = next(
@@ -306,18 +306,30 @@ class TerminalUI:
         mute_status = self.term.red("MUTED") if is_muted else self.term.green("LIVE")
         player_count = len(players)
 
-        status = f"[{mute_status}] Players: {player_count}"
-        if local_player:
-            status += f" | Position: ({local_player.x}, {local_player.y})"
-        output.append(status + clear_eol)
-
         # Mic level (green 0-50%, yellow 50-90%, red 90-100%)
         level_chars = int(mic_level * 20)
         green_part = self.term.green("#" * min(level_chars, 10))
         yellow_part = self.term.yellow("#" * max(0, min(level_chars - 10, 8)))
         red_part = self.term.red("#" * max(0, level_chars - 18))
-        padding = " " * (20 - level_chars)
-        output.append(f"Mic: [{green_part}{yellow_part}{red_part}{padding}]{clear_eol}")
+        mic_padding = " " * (20 - level_chars)
+        mic_bar = f"[{green_part}{yellow_part}{red_part}{mic_padding}]"
+
+        # Left side: mute status + mic level
+        left_part = f"[{mute_status}] Mic: {mic_bar}"
+        # Right side: players + position
+        right_part = f"Players: {player_count}"
+        if local_player:
+            right_part += f" | Position: ({local_player.x}, {local_player.y})"
+
+        # Calculate padding to right-align (account for ANSI codes in left_part)
+        # Left part visible length: [MUTED]/[LIVE] + " Mic: " + "[" + 20 chars + "]"
+        mute_text_len = 5 if is_muted else 4  # "MUTED" or "LIVE"
+        left_visible_len = (
+            1 + mute_text_len + 1 + 6 + 22
+        )  # [ + text + ] + " Mic: " + mic_bar
+        gap = max(1, self.term.width - left_visible_len - len(right_part))
+        status_line = left_part + " " * gap + right_part
+        output.append(status_line + clear_eol)
 
         # Clear any remaining lines from previous frame
         output.append(str(self.term.clear_eos))
