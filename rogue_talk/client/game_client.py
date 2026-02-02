@@ -371,7 +371,7 @@ class GameClient:
         @pc.on("connectionstatechange")
         async def on_connectionstatechange() -> None:
             state = pc.connectionState
-            print(f"WebRTC connection state: {state}")
+            _logger.info(f"WebRTC connection state: {state}")
             if state in ("failed", "closed", "disconnected"):
                 self._connection_closed.set()
                 self.running = False
@@ -481,7 +481,6 @@ class GameClient:
             _logger.debug("Sent renegotiation answer")
         except Exception as e:
             _logger.error(f"Renegotiation failed: {e}")
-            print(f"Renegotiation failed: {e}")
 
     async def run(self) -> None:
         """Main client loop."""
@@ -775,13 +774,15 @@ class GameClient:
 
             # Combine with cached files
             all_files = {**cached_files, **new_files}
-            print(
+            _logger.info(
                 f"Level {level_name}: {cached_count}/{total_count} cached, "
                 f"downloaded {len(new_files)} files"
             )
         else:
             all_files = cached_files
-            print(f"Level {level_name}: {cached_count}/{total_count} files from cache")
+            _logger.info(
+                f"Level {level_name}: {cached_count}/{total_count} files from cache"
+            )
 
         # Write all files to directory
         write_files_to_dir(all_files, extract_dir)
@@ -1056,7 +1057,7 @@ class GameClient:
             # Audio modules not available
             pass
         except Exception as e:
-            print(f"Audio init failed: {e}")
+            _logger.error(f"Audio init failed: {e}")
 
     async def _stop_audio(self) -> None:
         """Stop audio capture and playback."""
