@@ -31,11 +31,15 @@ def main() -> None:
         "--name", default=os.environ.get("USER", "player"), help="Player name"
     )
     parser.add_argument(
-        "--log-file", default="rogue_talk_client.log", help="Log file path"
+        "--log", help="Log file path (logging disabled if not specified)"
     )
     args = parser.parse_args()
 
-    setup_logging(args.log_file)
+    if args.log:
+        setup_logging(args.log)
+    else:
+        # Suppress all logging output (no stderr spam during TUI)
+        logging.getLogger().addHandler(logging.NullHandler())
 
     client = GameClient(args.host, args.port, args.name)
 

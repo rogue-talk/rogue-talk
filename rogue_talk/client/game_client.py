@@ -7,6 +7,7 @@ import logging
 import struct
 import tempfile
 import time
+import warnings
 from asyncio import StreamReader, StreamWriter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -15,15 +16,24 @@ from aiortc import RTCPeerConnection, RTCSessionDescription
 from blessed import Terminal
 from blessed.keyboard import Keystroke
 
-# Set up logging to file (doesn't interfere with terminal UI)
-# Use PID in filename so multiple clients on same machine have separate logs
-import os as _os
-
 _logger = logging.getLogger(__name__)
-_debug_handler = logging.FileHandler(f"/tmp/rogue_talk_client_{_os.getpid()}.log")
-_debug_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
-_logger.addHandler(_debug_handler)
-_logger.setLevel(logging.DEBUG)
+
+
+def _asyncio_exception_handler(
+    loop: asyncio.AbstractEventLoop, context: dict[str, Any]
+) -> None:
+    """Custom asyncio exception handler that logs to file instead of stderr.
+
+    By default, asyncio prints unhandled task exceptions to stderr, which
+    interferes with the terminal UI. This redirects them to the log file.
+    """
+    exception = context.get("exception")
+    message = context.get("message", "Unhandled exception in asyncio task")
+    if exception:
+        _logger.error(f"{message}: {exception}", exc_info=exception)
+    else:
+        _logger.error(message)
+
 
 from ..audio.sound_loader import SoundCache
 from ..audio.webrtc_tracks import AudioCaptureTrack, AudioPlaybackTrack
@@ -487,6 +497,13 @@ class GameClient:
         self.running = True
         self._loop = asyncio.get_running_loop()
         self._position_queue = asyncio.Queue()
+
+        # Redirect asyncio exceptions to log file instead of stderr (avoids TUI flicker)
+        self._loop.set_exception_handler(_asyncio_exception_handler)
+
+        # Redirect Python warnings to logging (avoids TUI flicker under load)
+        logging.captureWarnings(True)
+        warnings.filterwarnings("always")  # Let logging handle all warnings
 
         # Start audio capture (feeds into WebRTC audio track)
         await self._start_audio()
