@@ -41,16 +41,23 @@ class Level:
     streams: dict[tuple[int, int], StreamInfo] = field(default_factory=dict)
 
     @classmethod
-    def from_file(cls, path: str) -> Level:
+    def from_file(
+        cls, path: str, tiles_dict: dict[str, tile_defs.TileDef] | None = None
+    ) -> Level:
         """Load a level from an ASCII text file."""
         with open(path, encoding="utf-8") as f:
             content = f.read()
-        return cls.from_string(content)
+        return cls.from_string(content, tiles_dict)
 
     @classmethod
-    def from_string(cls, content: str) -> Level:
+    def from_string(
+        cls, content: str, tiles_dict: dict[str, tile_defs.TileDef] | None = None
+    ) -> Level:
         """Load a level from an ASCII string."""
         lines = content.rstrip("\n").split("\n")
+
+        # Use provided tiles or fall back to global TILES
+        tiles_lookup = tiles_dict if tiles_dict is not None else tile_defs.TILES
 
         # Determine dimensions
         height = len(lines)
@@ -68,11 +75,12 @@ class Level:
                 else:
                     char = " "  # Pad with void
 
-                if char == "S":
+                # Check if this tile is a spawn point
+                tile_def = tiles_lookup.get(char)
+                if tile_def and tile_def.is_spawn:
                     spawn_positions.append((x, y))
-                    row.append(".")  # Treat spawn as floor
-                else:
-                    row.append(char)
+
+                row.append(char)
             tiles.append(row)
 
         return cls(

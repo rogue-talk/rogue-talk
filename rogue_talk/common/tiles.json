@@ -40,6 +40,18 @@
       "blocks_sight": false,
       "blocks_sound": false
     },
+    "S": {
+      "name": "spawn",
+      "color": "white",
+      "walkable": true,
+      "walking_sound": null,
+      "nearby_sound": null,
+      "animation_colors": null,
+      "blocks_sight": false,
+      "blocks_sound": false,
+      "is_spawn": true,
+      "render_char": "."
+    },
     ",": {
       "name": "grass",
       "color": "green",

@@ -192,8 +192,8 @@ class GameServer:
         else:
             tiles = dict(tile_defs.TILES)
 
-        # Parse level
-        level = Level.from_string(level_content)
+        # Parse level (pass tiles to detect spawn points)
+        level = Level.from_string(level_content, tiles)
 
         # Parse doors from level.json
         if level_json_data:
@@ -231,6 +231,7 @@ class GameServer:
                 if tile_data.get("blocks_sound") is not None
                 else None,
                 is_door=bool(tile_data.get("is_door", False)),
+                is_spawn=bool(tile_data.get("is_spawn", False)),
                 render_char=str(tile_data["render_char"])
                 if tile_data.get("render_char")
                 else None,

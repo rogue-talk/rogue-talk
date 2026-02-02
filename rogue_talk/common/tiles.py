@@ -25,6 +25,8 @@ class TileDef:
     blocks_sound: bool | None = None  # None means use !walkable as default
     # If true, this tile is a door/teleporter (target defined in level.json)
     is_door: bool = False
+    # If true, this tile is a spawn point for new players
+    is_spawn: bool = False
     # Optional: render using a different character than the map character
     render_char: str | None = None
 
@@ -60,6 +62,7 @@ def _load_tiles_from_json(
             blocks_sight=tile_data.get("blocks_sight"),
             blocks_sound=tile_data.get("blocks_sound"),
             is_door=tile_data.get("is_door", False),
+            is_spawn=tile_data.get("is_spawn", False),
             render_char=tile_data.get("render_char"),
         )
 
