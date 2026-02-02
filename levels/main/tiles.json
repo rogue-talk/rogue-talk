@@ -134,6 +134,14 @@
       "blocks_sound": false,
       "is_door": true
     },
+    "S": {
+      "name": "spawn",
+      "render_char": ".",
+      "color": "white",
+      "walkable": true,
+      "walking_sound": "floor_walking.ogg",
+      "is_spawn": true
+    },
 
     "a": { "name": "a", "render_char": "A", "color": "magenta", "walkable": true },
     "b": { "name": "b", "render_char": "B", "color": "magenta", "walkable": true },

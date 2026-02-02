@@ -38,6 +38,13 @@
       "blocks_sound": false,
       "is_door": true
     },
+    "S": {
+      "name": "spawn",
+      "render_char": ".",
+      "color": "white",
+      "walkable": true,
+      "is_spawn": true
+    },
     " ": {
       "name": "void",
       "color": "black",

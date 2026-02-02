@@ -199,24 +199,39 @@ class GameServer:
         if level_json_data:
             self._parse_level_json(level, level_json_data)
 
-        # Validate door consistency
-        self._validate_doors(name, level, tiles)
+        # Validate level consistency
+        self._validate_level(name, level, tiles)
 
         return level, tiles
 
-    def _validate_doors(
+    def _validate_level(
         self, level_name: str, level: Level, tiles: dict[str, tile_defs.TileDef]
     ) -> None:
-        """Validate that door/teleporter tiles and level.json are consistent.
-
-        Both doors (cross-level) and teleporters (same-level) use the same
-        mechanism: tiles with is_door=true and entries in level.json's doors array.
+        """Validate level consistency.
 
         Logs warnings for:
+        - Tiles used in level.txt that aren't defined in tiles.json
         - Doors/teleporters in level.json at positions without is_door tiles
         - Tiles with is_door=true that have no level.json entry
         - Same-level teleporters with invalid target positions
         """
+        # Check for undefined tiles
+        undefined_tiles: dict[str, list[tuple[int, int]]] = {}
+        for y in range(level.height):
+            for x in range(level.width):
+                tile_char = level.get_tile(x, y)
+                if tile_char not in tiles:
+                    if tile_char not in undefined_tiles:
+                        undefined_tiles[tile_char] = []
+                    if len(undefined_tiles[tile_char]) < 3:  # Limit examples
+                        undefined_tiles[tile_char].append((x, y))
+
+        for tile_char, positions in undefined_tiles.items():
+            pos_str = ", ".join(f"({x},{y})" for x, y in positions)
+            print(
+                f"WARNING: {level_name}: Tile '{tile_char}' (ord={ord(tile_char)}) "
+                f"not defined in tiles.json (e.g. at {pos_str})"
+            )
         # Check doors defined in level.json
         for pos, door in level.doors.items():
             x, y = pos
