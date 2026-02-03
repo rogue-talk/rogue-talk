@@ -31,8 +31,10 @@ class PlayerAudioStream:
     """Audio output stream for a single player's voice using PyAV backend."""
 
     # Buffer settings - balance between latency and jitter handling
-    MIN_BUFFER = FRAME_SIZE * 3  # 60ms before starting playback
-    MAX_BUFFER = FRAME_SIZE * 10  # 200ms max buffer
+    # Larger buffers help with network jitter and clock drift between sender/receiver
+    MIN_BUFFER = FRAME_SIZE * 5  # 100ms before starting playback
+    MAX_BUFFER = FRAME_SIZE * 20  # 400ms max buffer
+    TARGET_BUFFER = FRAME_SIZE * 10  # 200ms target - maintain around this level
 
     def __init__(self, player_id: int, player_name: str = "") -> None:
         self.player_id = player_id
@@ -110,11 +112,29 @@ class PlayerAudioStream:
 
     def _playback_loop(self) -> None:
         """Background thread that reads from ring buffer and writes to audio output."""
-        frame_duration = FRAME_SIZE / SAMPLE_RATE
+        base_frame_duration = FRAME_SIZE / SAMPLE_RATE
         # Use absolute timing to prevent drift
         next_frame_time = time.perf_counter()
 
         while self._running and self._stream is not None:
+            # Get current buffer level for adaptive timing
+            with self._lock:
+                buf_size = len(self._ring_buffer)
+                buffer_samples = (self._write_pos - self._read_pos) % buf_size
+
+            # Adaptive clock drift compensation:
+            # Adjust playback speed based on buffer level relative to target
+            # This compensates for clock differences between sender and receiver
+            if buffer_samples < self.TARGET_BUFFER // 2:
+                # Buffer getting low - slow down by 5% to let it fill
+                frame_duration = base_frame_duration * 1.05
+            elif buffer_samples > self.TARGET_BUFFER * 3 // 2:
+                # Buffer getting high - speed up by 5% to drain it
+                frame_duration = base_frame_duration * 0.95
+            else:
+                # Buffer healthy - normal speed
+                frame_duration = base_frame_duration
+
             # Generate the next frame from ring buffer
             frame, is_underrun = self._get_frame_with_status()
             self._frame_count += 1
@@ -124,9 +144,6 @@ class PlayerAudioStream:
 
             # Log stats periodically (every ~10 seconds)
             if self._frame_count % 500 == 1:
-                with self._lock:
-                    buf_size = len(self._ring_buffer)
-                    buffer_samples = (self._write_pos - self._read_pos) % buf_size
                 _logger.debug(
                     f"PlayerAudioStream {self.player_id}: "
                     f"frames={self._frame_count}, underruns={self._underrun_count}, "
