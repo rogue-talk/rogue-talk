@@ -184,26 +184,20 @@ class AudioPlayback:
     """Manages per-player audio streams. PipeWire/PulseAudio handles mixing."""
 
     def __init__(self) -> None:
-        # Per-player audio streams
-        self._player_streams: dict[int, PlayerAudioStream] = {}
-        self._player_names: dict[int, str] = {}  # player_id -> name lookup
-        self._player_positions: dict[int, tuple[int, int]] = {}  # player_id -> (x, y)
+        # Per-player audio streams (keyed by player name)
+        self._player_streams: dict[str, PlayerAudioStream] = {}
+        self._player_positions: dict[str, tuple[int, int]] = {}  # name -> (x, y)
         self._my_position: tuple[int, int] = (0, 0)
         self._streams_lock = threading.Lock()
-        # Multiple WebRTC tracks: source_player_id -> AudioPlaybackTrack
-        self._playback_tracks: dict[int, "AudioPlaybackTrack"] = {}
+        # Multiple WebRTC tracks (keyed by player name)
+        self._playback_tracks: dict[str, "AudioPlaybackTrack"] = {}
         self._tracks_lock = threading.Lock()
         self._running = False
         # Poll thread for WebRTC frames
         self._poll_thread: threading.Thread | None = None
 
-    def update_player_names(self, player_names: dict[int, str]) -> None:
-        """Update the player ID to name mapping."""
-        with self._streams_lock:
-            self._player_names = player_names.copy()
-
     def update_positions(
-        self, my_x: int, my_y: int, player_positions: dict[int, tuple[int, int]]
+        self, my_x: int, my_y: int, player_positions: dict[str, tuple[int, int]]
     ) -> None:
         """Update position data and clean up out-of-range streams."""
         with self._streams_lock:
@@ -212,33 +206,35 @@ class AudioPlayback:
 
         # Clean up streams for players that are now out of range
         max_dist_sq = AUDIO_MAX_DISTANCE * AUDIO_MAX_DISTANCE
-        to_stop: list[int] = []
+        to_stop: list[str] = []
 
         with self._streams_lock:
-            for player_id in self._player_streams:
-                pos = player_positions.get(player_id)
+            for player_name in self._player_streams:
+                pos = player_positions.get(player_name)
                 if pos is None:
                     continue
                 dx = pos[0] - my_x
                 dy = pos[1] - my_y
                 dist_sq = dx * dx + dy * dy
                 if dist_sq > max_dist_sq:
-                    to_stop.append(player_id)
+                    to_stop.append(player_name)
 
-        for player_id in to_stop:
+        for player_name in to_stop:
             with self._streams_lock:
-                stream = self._player_streams.pop(player_id, None)
+                stream = self._player_streams.pop(player_name, None)
                 if stream:
                     stream.stop()
                     _logger.debug(
-                        f"Stopped out-of-range audio output for player {player_id}"
+                        f"Stopped out-of-range audio output for {player_name}"
                     )
 
-    def _is_in_range(self, player_id: int) -> bool:
+    def _is_in_range(self, player_name: str) -> bool:
         """Check if a player is within audio range."""
-        pos = self._player_positions.get(player_id)
+        pos = self._player_positions.get(player_name)
         if pos is None:
-            _logger.debug(f"_is_in_range({player_id}): no position, assuming in range")
+            _logger.debug(
+                f"_is_in_range({player_name}): no position, assuming in range"
+            )
             return True  # Unknown position, assume in range
         dx = pos[0] - self._my_position[0]
         dy = pos[1] - self._my_position[1]
@@ -246,22 +242,20 @@ class AudioPlayback:
         in_range = dist_sq <= AUDIO_MAX_DISTANCE * AUDIO_MAX_DISTANCE
         if not in_range:
             _logger.debug(
-                f"_is_in_range({player_id}): out of range, "
+                f"_is_in_range({player_name}): out of range, "
                 f"my={self._my_position} them={pos} dist_sq={dist_sq}"
             )
         return in_range
 
-    def add_playback_track(
-        self, source_player_id: int, track: "AudioPlaybackTrack"
-    ) -> None:
-        """Add a playback track for a source player."""
-        _logger.debug(f"add_playback_track called for player {source_player_id}")
+    def add_playback_track(self, player_name: str, track: "AudioPlaybackTrack") -> None:
+        """Add a playback track for a player."""
+        _logger.debug(f"add_playback_track called for {player_name}")
         with self._tracks_lock:
-            if source_player_id in self._playback_tracks:
-                _logger.debug(f"Track for player {source_player_id} already exists")
+            if player_name in self._playback_tracks:
+                _logger.debug(f"Track for {player_name} already exists")
                 return  # Already added
-            self._playback_tracks[source_player_id] = track
-        _logger.debug(f"Added playback track for player {source_player_id}")
+            self._playback_tracks[player_name] = track
+        _logger.debug(f"Added playback track for {player_name}")
 
     def start(self) -> None:
         """Start audio playback system."""
@@ -282,36 +276,31 @@ class AudioPlayback:
                 stream.stop()
             self._player_streams.clear()
 
-    def remove_player(self, player_id: int) -> None:
+    def remove_player(self, player_name: str) -> None:
         """Clean up audio stream and track for a player who left."""
         with self._streams_lock:
-            stream = self._player_streams.pop(player_id, None)
+            stream = self._player_streams.pop(player_name, None)
             if stream:
                 stream.stop()
         with self._tracks_lock:
-            self._playback_tracks.pop(player_id, None)
+            self._playback_tracks.pop(player_name, None)
 
-    def _get_or_create_stream(self, player_id: int) -> PlayerAudioStream | None:
+    def _get_or_create_stream(self, player_name: str) -> PlayerAudioStream | None:
         """Get existing stream or create new one for player if in range."""
         with self._streams_lock:
-            if player_id in self._player_streams:
-                return self._player_streams[player_id]
+            if player_name in self._player_streams:
+                return self._player_streams[player_name]
 
             # Only create stream if player is in range
-            if not self._is_in_range(player_id):
+            if not self._is_in_range(player_name):
                 return None
 
-            # Only create stream if we have the player's name (from WORLD_STATE)
-            player_name = self._player_names.get(player_id)
-            if player_name is None:
-                return None  # Wait for WORLD_STATE with player info
-
+            # PlayerAudioStream needs an ID for PulseAudio sink naming - use hash of name
+            player_id = hash(player_name) & 0x7FFFFFFF  # Positive int
             stream = PlayerAudioStream(player_id, player_name)
             stream.start()
-            self._player_streams[player_id] = stream
-            _logger.debug(
-                f"Created and started PlayerAudioStream for player {player_id}"
-            )
+            self._player_streams[player_name] = stream
+            _logger.debug(f"Created and started PlayerAudioStream for {player_name}")
             return stream
 
     def _poll_webrtc(self) -> None:
@@ -322,7 +311,7 @@ class AudioPlayback:
             with self._tracks_lock:
                 tracks = list(self._playback_tracks.items())
 
-            for source_player_id, track in tracks:
+            for player_name, track in tracks:
                 # Drain all available frames from this track
                 while True:
                     pcm_data = track.get_frame()
@@ -331,10 +320,10 @@ class AudioPlayback:
                     frame_count += 1
                     if frame_count % 500 == 1:
                         _logger.debug(
-                            f"Received audio frame {frame_count} from player {source_player_id}, "
+                            f"Received audio frame {frame_count} from {player_name}, "
                             f"samples={len(pcm_data)}"
                         )
-                    stream = self._get_or_create_stream(source_player_id)
+                    stream = self._get_or_create_stream(player_name)
                     if stream is not None:
                         # Volume is always 1.0 here - server already applied distance scaling
                         stream.feed_audio(pcm_data, 1.0)
@@ -342,7 +331,7 @@ class AudioPlayback:
                         if frame_count % 500 == 1:
                             level = float(np.abs(pcm_data).max())
                             _logger.debug(
-                                f"Audio level from player {source_player_id}: {level:.4f}"
+                                f"Audio level from {player_name}: {level:.4f}"
                             )
                     # else: player is out of range, discard audio
 

@@ -140,12 +140,10 @@ class GameClient:
         self.webrtc_connected: bool = False
         # WebRTC audio
         self.audio_capture_track: AudioCaptureTrack | None = None
-        # Multiple playback tracks: source_player_id -> AudioPlaybackTrack
-        self.audio_playback_tracks: dict[int, AudioPlaybackTrack] = {}
-        # Track MID -> source_player_id mapping (from server)
+        # Multiple playback tracks: player_name -> AudioPlaybackTrack
+        self.audio_playback_tracks: dict[str, AudioPlaybackTrack] = {}
+        # Track MID -> player_id mapping (from server, used to look up names)
         self._track_map: dict[str, int] = {}
-        # Player names cached for when audio_playback is created
-        self._pending_player_names: dict[int, str] = {}
         self.running = False
         self._needs_render = True  # Flag to track when re-render is needed
         self._last_render_time = 0.0  # For periodic updates (mic level, animations)
@@ -470,10 +468,10 @@ class GameClient:
             if track.kind == "audio":
                 _logger.debug(f"on_track fired, track_map={self._track_map}")
                 # Find which transceiver this track belongs to
-                source_player_id = self._get_source_player_for_track(track)
-                if source_player_id is not None:
-                    _logger.debug(f"Matched track to player {source_player_id}")
-                    self._setup_playback_track(source_player_id, track)
+                player_name = self._get_source_player_for_track(track)
+                if player_name is not None:
+                    _logger.debug(f"Matched track to {player_name}")
+                    self._setup_playback_track(player_name, track)
                 else:
                     _logger.debug("Could not match track to player")
 
@@ -533,8 +531,15 @@ class GameClient:
 
         return True
 
-    def _get_source_player_for_track(self, track: Any) -> int | None:
-        """Find the source player ID for an incoming track using the track map."""
+    def _get_player_name_by_id(self, player_id: int) -> str | None:
+        """Look up a player's name by their ID."""
+        for p in self.players:
+            if p.player_id == player_id:
+                return p.name
+        return None
+
+    def _get_source_player_for_track(self, track: Any) -> str | None:
+        """Find the source player name for an incoming track using the track map."""
         if not self.peer_connection:
             return None
 
@@ -543,24 +548,25 @@ class GameClient:
             if transceiver.receiver and transceiver.receiver.track == track:
                 mid = transceiver.mid
                 if mid and mid in self._track_map:
-                    return self._track_map[mid]
+                    player_id = self._track_map[mid]
+                    return self._get_player_name_by_id(player_id)
         return None
 
-    def _setup_playback_track(self, source_player_id: int, track: Any) -> None:
-        """Set up a playback track for a source player."""
+    def _setup_playback_track(self, player_name: str, track: Any) -> None:
+        """Set up a playback track for a player."""
         # Create new playback track if needed
-        if source_player_id not in self.audio_playback_tracks:
-            playback = AudioPlaybackTrack(source_player_id)
-            self.audio_playback_tracks[source_player_id] = playback
+        if player_name not in self.audio_playback_tracks:
+            playback = AudioPlaybackTrack(player_name)
+            self.audio_playback_tracks[player_name] = playback
 
         # Set the track and start receiving
-        playback = self.audio_playback_tracks[source_player_id]
+        playback = self.audio_playback_tracks[player_name]
         playback.set_track(track)
         asyncio.create_task(playback.start())
 
         # Update AudioPlayback to know about this track
         if self.audio_playback:
-            self.audio_playback.add_playback_track(source_player_id, playback)
+            self.audio_playback.add_playback_track(player_name, playback)
 
     async def _handle_renegotiation_offer(self, offer_sdp: str) -> None:
         """Handle a renegotiation offer from the server."""
@@ -707,18 +713,14 @@ class GameClient:
         if msg_type == MessageType.WORLD_STATE:
             world_state = deserialize_world_state(payload)
             self.players = world_state.players
-            # Update audio playback with player names and positions
-            # Always cache player names (needed before audio_playback exists)
-            names = {p.player_id: p.name for p in self.players}
-            self._pending_player_names = names
 
             if self.audio_playback:
-                self.audio_playback.update_player_names(names)
-                positions = {p.player_id: (p.x, p.y) for p in self.players}
+                # Update positions using player names as keys
+                positions = {p.name: (p.x, p.y) for p in self.players}
                 self.audio_playback.update_positions(self.x, self.y, positions)
                 # Add any pending tracks
-                for player_id, track in self.audio_playback_tracks.items():
-                    self.audio_playback.add_playback_track(player_id, track)
+                for player_name, track in self.audio_playback_tracks.items():
+                    self.audio_playback.add_playback_track(player_name, track)
             # Only update our position from server if no pending moves
             # (otherwise we'd rubber-band while moves are in-flight)
             if not self._pending_moves:
@@ -766,13 +768,16 @@ class GameClient:
 
         elif msg_type == MessageType.PLAYER_LEFT:
             player_id = deserialize_player_left(payload)
+            # Look up player name before removing from list
+            left_player_name = self._get_player_name_by_id(player_id)
             self.players = [p for p in self.players if p.player_id != player_id]
-            if self.audio_playback:
-                self.audio_playback.remove_player(player_id)
-            # Also clean up the playback track
-            if player_id in self.audio_playback_tracks:
-                track = self.audio_playback_tracks.pop(player_id)
-                asyncio.create_task(track.stop())
+            if left_player_name:
+                if self.audio_playback:
+                    self.audio_playback.remove_player(left_player_name)
+                # Also clean up the playback track
+                if left_player_name in self.audio_playback_tracks:
+                    track = self.audio_playback_tracks.pop(left_player_name)
+                    asyncio.create_task(track.stop())
             self._needs_render = True
 
         # AUDIO_FRAME is not used with WebRTC - audio comes via track
@@ -1287,13 +1292,9 @@ class GameClient:
             self.audio_playback = AudioPlayback()
             self.audio_playback.start()
 
-            # Set cached player names before adding tracks (so sinks get correct names)
-            if self._pending_player_names:
-                self.audio_playback.update_player_names(self._pending_player_names)
-
             # Add any tracks that arrived before audio_playback was ready
-            for player_id, track in self.audio_playback_tracks.items():
-                self.audio_playback.add_playback_track(player_id, track)
+            for player_name, track in self.audio_playback_tracks.items():
+                self.audio_playback.add_playback_track(player_name, track)
 
             # Start capture - feed audio to WebRTC track
             self.audio_capture = AudioCapture(self._on_audio_frame)

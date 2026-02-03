@@ -98,8 +98,8 @@ class AudioCaptureTrack(MediaStreamTrack):
 class AudioPlaybackTrack:
     """Receives audio from a WebRTC track and provides it for playback."""
 
-    def __init__(self, source_player_id: int = 0) -> None:
-        self.source_player_id = source_player_id
+    def __init__(self, source_player_name: str = "") -> None:
+        self.source_player_name = source_player_name
         # Use thread-safe queue since playback runs in separate thread
         # Larger buffer (50 frames = 1s) to handle bursts from WebRTC
         self._queue: queue.Queue[npt.NDArray[np.float32]] = queue.Queue(maxsize=50)
@@ -193,7 +193,7 @@ class AudioPlaybackTrack:
                     # Log stats periodically
                     if self._frame_count % 500 == 0:
                         logger.debug(
-                            f"AudioPlaybackTrack player {self.source_player_id}: "
+                            f"AudioPlaybackTrack {self.source_player_name}: "
                             f"frames={self._frame_count}, drops={self._drop_count}"
                         )
             except asyncio.CancelledError:
