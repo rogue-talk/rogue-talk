@@ -176,37 +176,84 @@ class GameClient:
         """Connect to the server and complete handshake."""
         # Load or create identity
         self.identity = load_or_create_identity()
+        print(f"Connecting to {self.host}:{self.port}...")
 
         try:
-            self.reader, self.writer = await asyncio.open_connection(
-                self.host, self.port
+            self.reader, self.writer = await asyncio.wait_for(
+                asyncio.open_connection(
+                    self.host, self.port, happy_eyeballs_delay=0.25
+                ),
+                timeout=10.0,
             )
-        except (ConnectionRefusedError, OSError) as e:
+            print("TCP connection established")
+        except asyncio.TimeoutError:
+            print(
+                f"Connection timed out after 10s (is {self.host}:{self.port} reachable?)"
+            )
+            return False
+        except ConnectionRefusedError:
+            print(f"Connection refused by {self.host}:{self.port}")
+            return False
+        except OSError as e:
             print(f"Failed to connect: {e}")
             return False
 
+        # Type narrowing for mypy (reader/writer are set after successful connection)
+        assert self.reader is not None and self.writer is not None
+        reader = self.reader
+        writer = self.writer
+
         # Wait for AUTH_CHALLENGE
-        msg_type, payload = await read_message(self.reader)
+        print("Waiting for AUTH_CHALLENGE...")
+        try:
+            msg_type, payload = await asyncio.wait_for(
+                read_message(reader), timeout=10.0
+            )
+        except asyncio.TimeoutError:
+            print(
+                "Timeout waiting for AUTH_CHALLENGE (server may not be running rogue-talk)"
+            )
+            return False
+        except asyncio.IncompleteReadError as e:
+            print(f"Connection closed during handshake: {e}")
+            return False
+
         if msg_type != MessageType.AUTH_CHALLENGE:
-            print("Unexpected response from server (expected AUTH_CHALLENGE)")
+            print(
+                f"Unexpected response from server: got {msg_type.name}, expected AUTH_CHALLENGE"
+            )
             return False
 
         nonce = deserialize_auth_challenge(payload)
+        print("Received AUTH_CHALLENGE, sending AUTH_RESPONSE...")
 
         # Sign the challenge
         signature = sign_challenge(self.identity.private_key, nonce, self.name)
 
         # Send AUTH_RESPONSE
         await write_message(
-            self.writer,
+            writer,
             MessageType.AUTH_RESPONSE,
             serialize_auth_response(self.identity.public_key, self.name, signature),
         )
 
         # Wait for AUTH_RESULT
-        msg_type, payload = await read_message(self.reader)
+        print("Waiting for AUTH_RESULT...")
+        try:
+            msg_type, payload = await asyncio.wait_for(
+                read_message(reader), timeout=10.0
+            )
+        except asyncio.TimeoutError:
+            print("Timeout waiting for AUTH_RESULT")
+            return False
+        except asyncio.IncompleteReadError as e:
+            print(f"Connection closed during authentication: {e}")
+            return False
+
         if msg_type != MessageType.AUTH_RESULT:
-            print("Unexpected response from server (expected AUTH_RESULT)")
+            print(
+                f"Unexpected response from server: got {msg_type.name}, expected AUTH_RESULT"
+            )
             return False
 
         auth_result = deserialize_auth_result(payload)
@@ -223,10 +270,24 @@ class GameClient:
             )
             return False
 
+        print("Authentication successful, waiting for SERVER_HELLO...")
+
         # Wait for SERVER_HELLO to learn which level we're in
-        msg_type, payload = await read_message(self.reader)
+        try:
+            msg_type, payload = await asyncio.wait_for(
+                read_message(reader), timeout=10.0
+            )
+        except asyncio.TimeoutError:
+            print("Timeout waiting for SERVER_HELLO")
+            return False
+        except asyncio.IncompleteReadError as e:
+            print(f"Connection closed while waiting for SERVER_HELLO: {e}")
+            return False
+
         if msg_type != MessageType.SERVER_HELLO:
-            print("Unexpected response from server")
+            print(
+                f"Unexpected response from server: got {msg_type.name}, expected SERVER_HELLO"
+            )
             return False
 
         (
@@ -240,8 +301,10 @@ class GameClient:
         ) = deserialize_server_hello(payload)
         self.level = Level.from_bytes(level_data)
         self.current_level = level_name
+        print(f"Received SERVER_HELLO: player_id={self.player_id}, level={level_name}")
 
         # Request level files using content-addressed caching
+        print("Requesting level files...")
         level_pack = await self._request_level_cached_tcp(level_name)
         if level_pack is None:
             print("Failed to load level pack")
@@ -267,6 +330,7 @@ class GameClient:
         self.level.interactions = interactions
 
         # Set up WebRTC connection
+        print("Setting up WebRTC connection...")
         if not await self._setup_webrtc():
             print("Failed to establish WebRTC connection")
             return False
@@ -292,11 +356,20 @@ class GameClient:
         )
 
         # Wait for LEVEL_MANIFEST
-        while True:
-            msg_type, payload = await read_message(self.reader)
-            if msg_type == MessageType.LEVEL_MANIFEST:
-                break
-            # Ignore other messages during initial connection
+        try:
+            while True:
+                msg_type, payload = await asyncio.wait_for(
+                    read_message(self.reader), timeout=10.0
+                )
+                if msg_type == MessageType.LEVEL_MANIFEST:
+                    break
+                # Ignore other messages during initial connection
+        except asyncio.TimeoutError:
+            print("Timeout waiting for LEVEL_MANIFEST")
+            return None
+        except asyncio.IncompleteReadError as e:
+            print(f"Connection closed while requesting level manifest: {e}")
+            return None
 
         manifest = deserialize_level_manifest(payload)
         if not manifest:
@@ -317,11 +390,20 @@ class GameClient:
             )
 
             # Wait for LEVEL_FILES_DATA
-            while True:
-                msg_type, payload = await read_message(self.reader)
-                if msg_type == MessageType.LEVEL_FILES_DATA:
-                    break
-                # Ignore other messages
+            try:
+                while True:
+                    msg_type, payload = await asyncio.wait_for(
+                        read_message(self.reader), timeout=30.0
+                    )
+                    if msg_type == MessageType.LEVEL_FILES_DATA:
+                        break
+                    # Ignore other messages
+            except asyncio.TimeoutError:
+                print("Timeout waiting for LEVEL_FILES_DATA")
+                return None
+            except asyncio.IncompleteReadError as e:
+                print(f"Connection closed while downloading level files: {e}")
+                return None
 
             new_files = deserialize_level_files_data(payload)
 
