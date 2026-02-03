@@ -769,6 +769,10 @@ class GameClient:
             self.players = [p for p in self.players if p.player_id != player_id]
             if self.audio_playback:
                 self.audio_playback.remove_player(player_id)
+            # Also clean up the playback track
+            if player_id in self.audio_playback_tracks:
+                track = self.audio_playback_tracks.pop(player_id)
+                asyncio.create_task(track.stop())
             self._needs_render = True
 
         # AUDIO_FRAME is not used with WebRTC - audio comes via track
