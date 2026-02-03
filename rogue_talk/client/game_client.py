@@ -718,9 +718,6 @@ class GameClient:
                 # Update positions using player names as keys
                 positions = {p.name: (p.x, p.y) for p in self.players}
                 self.audio_playback.update_positions(self.x, self.y, positions)
-                # Add any pending tracks
-                for player_name, track in self.audio_playback_tracks.items():
-                    self.audio_playback.add_playback_track(player_name, track)
             # Only update our position from server if no pending moves
             # (otherwise we'd rubber-band while moves are in-flight)
             if not self._pending_moves:
