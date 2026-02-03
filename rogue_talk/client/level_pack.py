@@ -6,7 +6,7 @@ import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .level import DoorInfo, StreamInfo
+from .level import DoorInfo, InteractionInfo, StreamInfo
 
 
 @dataclass
@@ -192,3 +192,31 @@ def parse_streams(level_json_path: Path | None) -> list[StreamInfo]:
         streams.append(stream)
 
     return streams
+
+
+def parse_interactions(level_json_path: Path | None) -> list[InteractionInfo]:
+    """Parse interaction definitions from level.json.
+
+    Args:
+        level_json_path: Path to level.json file, or None
+
+    Returns:
+        List of InteractionInfo objects
+    """
+    if level_json_path is None or not level_json_path.exists():
+        return []
+
+    with open(level_json_path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    interactions: list[InteractionInfo] = []
+    for interaction_data in data.get("interactions", []):
+        interaction = InteractionInfo(
+            x=interaction_data["x"],
+            y=interaction_data["y"],
+            text=interaction_data["text"],
+            hidden=interaction_data.get("hidden", False),
+        )
+        interactions.append(interaction)
+
+    return interactions

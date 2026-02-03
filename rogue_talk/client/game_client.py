@@ -73,6 +73,7 @@ from .identity import Identity, load_or_create_identity
 from .input_handler import (
     get_movement,
     is_help_key,
+    is_interact_key,
     is_mute_key,
     is_player_table_key,
     is_quit_key,
@@ -85,6 +86,7 @@ from .level_pack import (
     create_level_pack_from_dir,
     extract_level_pack,
     parse_doors,
+    parse_interactions,
     parse_streams,
     write_files_to_dir,
 )
@@ -116,6 +118,12 @@ class GameClient:
         self.show_player_names: bool = True
         self.show_player_table: bool = False
         self.show_help: bool = False
+        # Interaction system
+        self._interact_pending_time: float | None = None
+        self._interact_lines: list[str] | None = None
+        self._interact_line_index: int = 0
+        self._interact_anim_start: float = 0.0
+        self._interact_chars_per_sec: float = 60.0  # Typewriter speed
         self.players: list[PlayerInfo] = []
         # TCP connection (only used for signaling)
         self.reader: StreamReader | None = None
@@ -253,6 +261,10 @@ class GameClient:
         # Parse and set streams from level.json
         streams = parse_streams(level_pack.level_json_path)
         self.level.streams = streams
+
+        # Parse and set interactions from level.json
+        interactions = parse_interactions(level_pack.level_json_path)
+        self.level.interactions = interactions
 
         # Set up WebRTC connection
         if not await self._setup_webrtc():
@@ -526,15 +538,29 @@ class GameClient:
                             break
                         await self._handle_input(key)
 
-                    # Render when something changed or periodically for animations/mic
+                    # Check for interact timeout (space pressed without direction)
                     now = time.monotonic()
-                    if self._needs_render or (now - self._last_render_time) > 0.25:
+                    if self._interact_pending_time is not None:
+                        if now - self._interact_pending_time > 0.2:  # 200ms timeout
+                            self._interact_with_tile(self.x, self.y)
+                            self._interact_pending_time = None
+
+                    # Check if interaction popup is active (keep fast updates while visible)
+                    has_interact_popup = self._interact_lines is not None
+
+                    # Render when something changed, periodically, or during popup display
+                    render_interval = 0.016 if has_interact_popup else 0.25
+                    if (
+                        self._needs_render
+                        or (now - self._last_render_time) > render_interval
+                    ):
                         self._render()
                         self._needs_render = False
                         self._last_render_time = now
 
-                    # Sleep longer when idle to save CPU
-                    await asyncio.sleep(0.05)
+                    # Sleep shorter during popup for smooth typewriter effect
+                    sleep_time = 0.016 if has_interact_popup else 0.05
+                    await asyncio.sleep(sleep_time)
         finally:
             self.running = False
             position_sender_task.cancel()
@@ -888,6 +914,10 @@ class GameClient:
         streams = parse_streams(level_pack.level_json_path)
         self.level.streams = streams
 
+        # Parse and set interactions for new level
+        interactions = parse_interactions(level_pack.level_json_path)
+        self.level.interactions = interactions
+
         # Load other levels for see-through portals
         await self._load_see_through_portal_levels()
 
@@ -972,29 +1002,85 @@ class GameClient:
             self._needs_render = True
             return
 
-        movement = get_movement(key)
-        if movement and self.webrtc_connected and self.level and self._position_queue:
-            # Rate limit movement (max 1 tile per tick interval)
-            now = time.monotonic()
-            if now - self._last_move_time < MOVEMENT_TICK_INTERVAL:
-                return  # Too fast, ignore this input
+        # Handle interact key (space)
+        if is_interact_key(key):
+            # If popup is showing, skip animation or advance to next line
+            if self._interact_lines is not None:
+                current_text = self._interact_lines[self._interact_line_index]
+                elapsed = time.monotonic() - self._interact_anim_start
+                chars_shown = int(elapsed * self._interact_chars_per_sec)
 
-            dx, dy = movement
-            new_x = self.x + dx
-            new_y = self.y + dy
-            # Client-side prediction: apply locally and track for reconciliation
-            if self.level.is_walkable(new_x, new_y):
-                self._last_move_time = now
-                self._move_seq += 1
-                seq = self._move_seq
-                self._pending_moves[seq] = (dx, dy, new_x, new_y)
-                self.x = new_x
-                self.y = new_y
+                # If animation still running, skip to end
+                if chars_shown < len(current_text):
+                    self._interact_anim_start = 0.0  # Show full text
+                    self._needs_render = True
+                    return
+
+                # Animation done - advance to next line or close
+                if self._interact_line_index < len(self._interact_lines) - 1:
+                    self._interact_line_index += 1
+                    self._interact_anim_start = time.monotonic()
+                else:
+                    self._interact_lines = None
+                    self._interact_line_index = 0
                 self._needs_render = True
-                # Queue position update (non-blocking)
-                self._position_queue.put_nowait((seq, new_x, new_y))
-                # Play walking sound for the new tile
-                self._tile_sound_player.on_player_move(new_x, new_y, self.level)
+                return
+            # Otherwise, start interact pending
+            self._interact_pending_time = time.monotonic()
+            return
+
+        movement = get_movement(key)
+        if movement and self.level:
+            dx, dy = movement
+
+            # If interact is pending, interact with tile in that direction
+            if self._interact_pending_time is not None:
+                self._interact_with_tile(self.x + dx, self.y + dy)
+                self._interact_pending_time = None
+                return
+
+            # Normal movement
+            if self.webrtc_connected and self._position_queue:
+                # Rate limit movement (max 1 tile per tick interval)
+                now = time.monotonic()
+                if now - self._last_move_time < MOVEMENT_TICK_INTERVAL:
+                    return  # Too fast, ignore this input
+
+                new_x = self.x + dx
+                new_y = self.y + dy
+                # Client-side prediction: apply locally and track for reconciliation
+                if self.level.is_walkable(new_x, new_y):
+                    self._last_move_time = now
+                    self._move_seq += 1
+                    seq = self._move_seq
+                    self._pending_moves[seq] = (dx, dy, new_x, new_y)
+                    self.x = new_x
+                    self.y = new_y
+                    self._needs_render = True
+                    # Queue position update (non-blocking)
+                    self._position_queue.put_nowait((seq, new_x, new_y))
+                    # Play walking sound for the new tile
+                    self._tile_sound_player.on_player_move(new_x, new_y, self.level)
+
+    def _interact_with_tile(self, x: int, y: int) -> None:
+        """Interact with the tile at the given position."""
+        if not self.level:
+            return
+
+        # Check for custom interaction at this position
+        interaction = self.level.get_interaction_at(x, y)
+        if interaction:
+            self._interact_lines = interaction.text
+        else:
+            # Default interaction message
+            tile_char = self.level.get_tile(x, y)
+            tile_def = tile_defs.get_tile(tile_char)
+            tile_name = tile_def.name or "unknown"
+            self._interact_lines = [f"Just some {tile_name}. Nothing to see here."]
+
+        self._interact_line_index = 0
+        self._interact_anim_start = time.monotonic()
+        self._needs_render = True
 
     async def _toggle_mute(self) -> None:
         """Toggle mute state."""
@@ -1028,6 +1114,22 @@ class GameClient:
         else:
             mic_level = 0.0
 
+        # Calculate interaction text with typewriter animation
+        interact_text = None
+        interact_has_more = False
+        if self._interact_lines:
+            full_text = self._interact_lines[self._interact_line_index]
+            elapsed = time.monotonic() - self._interact_anim_start
+            chars_to_show = int(elapsed * self._interact_chars_per_sec)
+            if chars_to_show >= len(full_text):
+                interact_text = full_text
+                # Only show triangle when animation is complete and more lines exist
+                interact_has_more = (
+                    self._interact_line_index < len(self._interact_lines) - 1
+                )
+            else:
+                interact_text = full_text[:chars_to_show]
+
         self.ui.render(
             self.level,
             self.players,
@@ -1041,6 +1143,8 @@ class GameClient:
             self.current_level,
             self.show_player_table,
             self.show_help,
+            interact_text,
+            interact_has_more,
         )
 
     async def _start_audio(self) -> None:

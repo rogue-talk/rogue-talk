@@ -154,6 +154,8 @@ class TerminalUI:
         current_level: str = "main",
         show_player_table: bool = False,
         show_help: bool = False,
+        interact_message: str | None = None,
+        interact_has_more: bool = False,
     ) -> None:
         """Render the game state to the terminal."""
         # Advance animation frame based on time (not render rate)
@@ -293,6 +295,17 @@ class TerminalUI:
                     positioned_line = left_pad + line_content
                     viewport_rows[popup_y] = positioned_line.ljust(viewport.width)
 
+        # Overlay interact message popup if active
+        if interact_message:
+            interact_popup_lines = self._render_interact_popup(
+                interact_message, viewport.width, viewport.height, interact_has_more
+            )
+            for popup_x, popup_y, line_content in interact_popup_lines:
+                if 0 <= popup_y < len(viewport_rows):
+                    left_pad = " " * max(0, popup_x)
+                    positioned_line = left_pad + line_content
+                    viewport_rows[popup_y] = positioned_line.ljust(viewport.width)
+
         # Add viewport rows to output
         for viewport_row in viewport_rows:
             output.append(viewport_row + clear_eol)
@@ -370,9 +383,16 @@ class TerminalUI:
             if stream is not None:
                 return (self._render_stream_with_lighting(distance), True)
 
-            # Direct visibility - render normally
+            # Check if there's a non-hidden interaction at this position
+            interaction = level.get_interaction_at(x, y)
+            invert = interaction is not None and not interaction.hidden
+
+            # Direct visibility - render normally (with invert for interactions)
             tile_char = level.get_tile(x, y)
-            return (self._render_tile_with_lighting(tile_char, distance, x), True)
+            return (
+                self._render_tile_with_lighting(tile_char, distance, x, invert),
+                True,
+            )
 
         # No direct LOS - check if viewing through a see-through portal
         portal_result = self._check_portal_view(
@@ -710,6 +730,92 @@ class TerminalUI:
 
         return overlays
 
+    def _render_interact_popup(
+        self,
+        message: str,
+        viewport_width: int,
+        viewport_height: int,
+        has_more: bool = False,
+    ) -> list[tuple[int, int, str]]:
+        """Render a centered interaction message popup.
+
+        Returns a list of (x, y, line_content) tuples for overlay onto viewport.
+        Popup is centered horizontally, positioned near the bottom.
+        Shows a down triangle indicator if has_more is True.
+        Long messages are wrapped to fit the fixed width.
+        """
+        # Fixed content width (not including borders and padding)
+        content_width = 50
+
+        # Wrap message to fit content width
+        wrapped_lines = self._wrap_text(message, content_width)
+
+        # Add indicator to last line if there are more partitions
+        if has_more:
+            wrapped_lines[-1] = wrapped_lines[-1] + " ▼"
+
+        # Calculate popup dimensions
+        popup_width = content_width + 4  # 2 chars padding each side
+        popup_height = len(wrapped_lines) + 2  # top border + lines + bottom border
+
+        # Center horizontally, position near bottom (70% down)
+        start_x = (viewport_width - popup_width) // 2
+        start_y = int(viewport_height * 0.7)
+
+        # Ensure popup fits
+        if start_x < 0:
+            start_x = 0
+        if start_y + popup_height > viewport_height:
+            start_y = max(0, viewport_height - popup_height)
+
+        overlays: list[tuple[int, int, str]] = []
+
+        # Top border
+        top_border = "╭" + "─" * (popup_width - 2) + "╮"
+        overlays.append((start_x, start_y, str(self.term.bold_yellow(top_border))))
+
+        # Message rows
+        for i, line in enumerate(wrapped_lines):
+            message_line = "│ " + line.ljust(content_width) + " │"
+            overlays.append(
+                (start_x, start_y + 1 + i, str(self.term.yellow(message_line)))
+            )
+
+        # Bottom border
+        bottom_border = "╰" + "─" * (popup_width - 2) + "╯"
+        overlays.append(
+            (
+                start_x,
+                start_y + 1 + len(wrapped_lines),
+                str(self.term.bold_yellow(bottom_border)),
+            )
+        )
+
+        return overlays
+
+    def _wrap_text(self, text: str, width: int) -> list[str]:
+        """Wrap text to fit within a given width, breaking on word boundaries."""
+        if len(text) <= width:
+            return [text]
+
+        lines: list[str] = []
+        words = text.split(" ")
+        current_line = ""
+
+        for word in words:
+            if not current_line:
+                current_line = word
+            elif len(current_line) + 1 + len(word) <= width:
+                current_line += " " + word
+            else:
+                lines.append(current_line)
+                current_line = word
+
+        if current_line:
+            lines.append(current_line)
+
+        return lines if lines else [""]
+
     def _get_color_fn(self, color_name: str) -> str:
         """Get color escape sequence for a color name or 256-color code."""
         # Check if it's a numeric 256-color code
@@ -722,10 +828,13 @@ class TerminalUI:
         return ""
 
     def _render_tile_with_lighting(
-        self, tile_char: str, distance: float, tile_x: int = 0
+        self, tile_char: str, distance: float, tile_x: int = 0, invert: bool = False
     ) -> str:
         """Render a tile with distance-based lighting effects."""
         tile_def = tiles.get_tile(tile_char)
+        # Prefix for inverted colors (non-hidden interactions)
+        invert_prefix = str(self.term.reverse) if invert else ""
+        invert_suffix = str(self.term.normal) if invert else ""
 
         # Determine color based on animation for animated tiles
         # Offset by tile_x so animation flows left to right
@@ -742,26 +851,28 @@ class TerminalUI:
         if distance <= LIGHT_FULL_RADIUS:
             # Full brightness
             if is_256_color:
-                return str(self.term.color(int(color_name))(tile_def.char))  # type: ignore
+                base = str(self.term.color(int(color_name))(tile_def.char))  # type: ignore
+                return f"{invert_prefix}{base}{invert_suffix}"
             if not color_name.startswith("bold_"):
                 bold_color = f"bold_{color_name}"
                 if hasattr(self.term, bold_color):
                     color_name = bold_color
             color_fn = getattr(self.term, color_name, None)
             if color_fn:
-                return str(color_fn(tile_def.char))
-            return tile_def.char
+                return f"{invert_prefix}{color_fn(tile_def.char)}{invert_suffix}"
+            return f"{invert_prefix}{tile_def.char}{invert_suffix}"
 
         elif distance <= LIGHT_NORMAL_RADIUS:
             # Normal brightness
             if is_256_color:
-                return str(self.term.color(int(color_name))(tile_def.char))  # type: ignore
+                base = str(self.term.color(int(color_name))(tile_def.char))  # type: ignore
+                return f"{invert_prefix}{base}{invert_suffix}"
             if color_name.startswith("bold_"):
                 color_name = color_name[5:]
             color_fn = getattr(self.term, color_name, None)
             if color_fn:
-                return str(color_fn(tile_def.char))
-            return tile_def.char
+                return f"{invert_prefix}{color_fn(tile_def.char)}{invert_suffix}"
+            return f"{invert_prefix}{tile_def.char}{invert_suffix}"
 
         elif distance <= LIGHT_DIM_RADIUS:
             # Slightly dim
@@ -771,15 +882,17 @@ class TerminalUI:
                 if color_name.startswith("bold_"):
                     color_name = color_name[5:]
                 color_attr = getattr(self.term, color_name, "")
-            return f"{self.term.dim}{color_attr}{tile_def.char}{self.term.normal}"
+            return f"{invert_prefix}{self.term.dim}{color_attr}{tile_def.char}{self.term.normal}{invert_suffix}"
 
         elif distance <= LIGHT_DARKER_RADIUS:
             # Darker - use medium gray (256-color: 245)
-            return str(self.term.color(245)(tile_def.char))  # type: ignore
+            base = str(self.term.color(245)(tile_def.char))  # type: ignore
+            return f"{invert_prefix}{base}{invert_suffix}"
 
         else:
             # Fading - use dark gray (256-color: 239)
-            return str(self.term.color(239)(tile_def.char))  # type: ignore
+            base = str(self.term.color(239)(tile_def.char))  # type: ignore
+            return f"{invert_prefix}{base}{invert_suffix}"
 
     def _check_portal_view(
         self,

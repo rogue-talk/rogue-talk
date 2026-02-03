@@ -24,5 +24,22 @@
       "url": "https://radio.lassul.us/music.ogg",
       "radius": 5
     }
+  ],
+  "interactions": [
+    {
+      "x": 10,
+      "y": 5,
+      "text": ["A mysterious inscription on the wall."],
+	  "hidden": true
+    },
+    {
+      "x": 9,
+      "y": 11,
+      "text": [
+        "An old bookshelf covered in dust.",
+        "Most books have faded titles.",
+        "One book catches your eye: 'The Art of Roguelike Design'"
+      ]
+    }
   ]
 }

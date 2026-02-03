@@ -31,6 +31,16 @@ class StreamInfo:
 
 
 @dataclass
+class InteractionInfo:
+    """Information about a custom interaction at a position."""
+
+    x: int
+    y: int
+    text: list[str]  # Lines of text to display when interacting
+    hidden: bool = False  # If False, render tile with inverted colors
+
+
+@dataclass
 class Level:
     """Client-side level representation."""
 
@@ -39,8 +49,10 @@ class Level:
     tiles: list[list[str]]
     doors: list[DoorInfo] | None = None
     streams: list[StreamInfo] | None = None
+    interactions: list[InteractionInfo] | None = None
     _see_through_door_cache: dict[tuple[int, int], DoorInfo] | None = None
     _stream_cache: dict[tuple[int, int], StreamInfo] | None = None
+    _interaction_cache: dict[tuple[int, int], InteractionInfo] | None = None
 
     @classmethod
     def from_bytes(cls, data: bytes) -> Level:
@@ -87,3 +99,14 @@ class Level:
                 for stream in self.streams:
                     self._stream_cache[(stream.x, stream.y)] = stream
         return self._stream_cache.get((x, y))
+
+    def get_interaction_at(self, x: int, y: int) -> InteractionInfo | None:
+        """Get a custom interaction at the given position, or None (O(1) cached)."""
+        if self._interaction_cache is None:
+            self._interaction_cache = {}
+            if self.interactions:
+                for interaction in self.interactions:
+                    self._interaction_cache[(interaction.x, interaction.y)] = (
+                        interaction
+                    )
+        return self._interaction_cache.get((x, y))

@@ -57,3 +57,8 @@ def is_player_table_key(key: Keystroke) -> bool:
 def is_help_key(key: Keystroke) -> bool:
     """Check if key is the help toggle (?)."""
     return str(key) == "?"
+
+
+def is_interact_key(key: Keystroke) -> bool:
+    """Check if key is the interact key (Space)."""
+    return str(key) == " "
