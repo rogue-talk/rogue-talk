@@ -83,7 +83,8 @@ class AudioCapture:
             self.last_level = float(np.abs(pcm).max())
 
             if self.is_muted:
-                continue
+                # Send silence instead of nothing to avoid abrupt cutoff
+                pcm = np.zeros(FRAME_SIZE, dtype=np.float32)
 
             # Simple VAD with holdover to avoid cutting off speech
             if self.last_level >= self.VAD_THRESHOLD:
