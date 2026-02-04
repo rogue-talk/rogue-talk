@@ -33,45 +33,68 @@
               av = super.av.override {
                 ffmpeg-headless = pkgs.ffmpeg;
               };
-              opuslib_next = self.buildPythonPackage {
-                pname = "opuslib_next";
-                version = "1.1.5";
-                src = pkgs.fetchPypi {
-                  pname = "opuslib_next";
-                  version = "1.1.5";
-                  sha256 = "6aec1015f25f799794d217601c74ea0fae8fd65d752578cb163fd2338ed075ce";
-                };
-                pyproject = true;
-                build-system = [ self.poetry-core ];
-                doCheck = false;
-              };
-              livekit = self.buildPythonPackage {
-                pname = "livekit";
-                version = "1.0.25";
-                format = "wheel";
-                src = pkgs.fetchPypi {
+              livekit =
+                let
+                  ffiPlatform =
+                    {
+                      "x86_64-linux" = {
+                        name = "ffi-linux-x86_64.zip";
+                        hash = "sha256-hfHCceQaf6H4mYNNpwVsIlz6ky1jBXdIdXzzYi+RPOw=";
+                      };
+                      "aarch64-linux" = {
+                        name = "ffi-linux-arm64.zip";
+                        hash = "sha256-6oBrzzOTutEvcIt3J/eHKY9IMgABIB1U65tz6yGgds4=";
+                      };
+                      "x86_64-darwin" = {
+                        name = "ffi-macos-x86_64.zip";
+                        hash = "sha256-Va9OfzVkOkneKXoBmT3nheHPK/ANXJevWpY6+r/WOZk=";
+                      };
+                      "aarch64-darwin" = {
+                        name = "ffi-macos-arm64.zip";
+                        hash = "sha256-stNRvB88UWAAHmp5XuUqyinijnbY0bnyjdd+HPcPnrM=";
+                      };
+                    }
+                    .${system};
+                  ffi = pkgs.fetchurl {
+                    url = "https://github.com/livekit/rust-sdks/releases/download/rust-sdks/livekit-ffi%400.12.44/${ffiPlatform.name}";
+                    hash = ffiPlatform.hash;
+                  };
+                  livekitSrc = pkgs.fetchFromGitHub {
+                    owner = "livekit";
+                    repo = "python-sdks";
+                    rev = "rtc-v1.0.25";
+                    hash = "sha256-O8WAwm2Dw7jgbZX8pOZ+h1KjwNvg91VgKFQZHkt0QJY=";
+                  };
+                in
+                self.buildPythonPackage {
                   pname = "livekit";
                   version = "1.0.25";
-                  format = "wheel";
-                  dist = "py3";
-                  python = "py3";
-                  abi = "none";
-                  platform = "manylinux_2_28_x86_64";
-                  sha256 = "abe498700566e90c89dbbf73731f850f4b5f7d2185bac88be71a34657b51fd3a";
+                  pyproject = true;
+                  src = "${livekitSrc}/livekit-rtc";
+                  postPatch = ''
+                    ${pkgs.unzip}/bin/unzip ${ffi} -d livekit/rtc/resources/
+                  '';
+                  build-system = [
+                    self.setuptools
+                    self.wheel
+                    self.requests
+                  ];
+                  nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+                    pkgs.autoPatchelfHook
+                  ];
+                  buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+                    pkgs.stdenv.cc.cc.lib
+                    pkgs.libva
+                  ];
+                  dependencies = [
+                    self.livekit-protocol
+                    self.protobuf
+                    self.types-protobuf
+                    self.numpy
+                    self.aiofiles
+                  ];
+                  doCheck = false;
                 };
-                nativeBuildInputs = [ pkgs.autoPatchelfHook ];
-                buildInputs = [
-                  pkgs.stdenv.cc.cc.lib
-                  pkgs.libva
-                ];
-                dependencies = [
-                  self.livekit-protocol
-                  self.protobuf
-                  self.numpy
-                  self.aiofiles
-                ];
-                doCheck = false;
-              };
             };
           };
 
@@ -89,7 +112,6 @@
                 av
                 blessed
                 soundfile
-                opuslib_next
                 numpy
                 cryptography
                 livekit-api
@@ -120,7 +142,6 @@
               pythonEnv = python.withPackages (ps: [
                 ps.blessed
                 ps.soundfile
-                ps.opuslib_next
                 ps.numpy
                 ps.cryptography
                 ps.livekit-api
@@ -146,7 +167,6 @@
               pythonEnv = python.withPackages (ps: [
                 ps.blessed
                 ps.soundfile
-                ps.opuslib_next
                 ps.numpy
                 ps.cryptography
                 ps.livekit-api
@@ -180,45 +200,68 @@
               av = super.av.override {
                 ffmpeg-headless = pkgs.ffmpeg;
               };
-              opuslib_next = self.buildPythonPackage {
-                pname = "opuslib_next";
-                version = "1.1.5";
-                src = pkgs.fetchPypi {
-                  pname = "opuslib_next";
-                  version = "1.1.5";
-                  sha256 = "6aec1015f25f799794d217601c74ea0fae8fd65d752578cb163fd2338ed075ce";
-                };
-                pyproject = true;
-                build-system = [ self.poetry-core ];
-                doCheck = false;
-              };
-              livekit = self.buildPythonPackage {
-                pname = "livekit";
-                version = "1.0.25";
-                format = "wheel";
-                src = pkgs.fetchPypi {
+              livekit =
+                let
+                  ffiPlatform =
+                    {
+                      "x86_64-linux" = {
+                        name = "ffi-linux-x86_64.zip";
+                        hash = "sha256-hfHCceQaf6H4mYNNpwVsIlz6ky1jBXdIdXzzYi+RPOw=";
+                      };
+                      "aarch64-linux" = {
+                        name = "ffi-linux-arm64.zip";
+                        hash = "sha256-6oBrzzOTutEvcIt3J/eHKY9IMgABIB1U65tz6yGgds4=";
+                      };
+                      "x86_64-darwin" = {
+                        name = "ffi-macos-x86_64.zip";
+                        hash = "sha256-Va9OfzVkOkneKXoBmT3nheHPK/ANXJevWpY6+r/WOZk=";
+                      };
+                      "aarch64-darwin" = {
+                        name = "ffi-macos-arm64.zip";
+                        hash = "sha256-stNRvB88UWAAHmp5XuUqyinijnbY0bnyjdd+HPcPnrM=";
+                      };
+                    }
+                    .${system};
+                  ffi = pkgs.fetchurl {
+                    url = "https://github.com/livekit/rust-sdks/releases/download/rust-sdks/livekit-ffi%400.12.44/${ffiPlatform.name}";
+                    hash = ffiPlatform.hash;
+                  };
+                  livekitSrc = pkgs.fetchFromGitHub {
+                    owner = "livekit";
+                    repo = "python-sdks";
+                    rev = "rtc-v1.0.25";
+                    hash = "sha256-O8WAwm2Dw7jgbZX8pOZ+h1KjwNvg91VgKFQZHkt0QJY=";
+                  };
+                in
+                self.buildPythonPackage {
                   pname = "livekit";
                   version = "1.0.25";
-                  format = "wheel";
-                  dist = "py3";
-                  python = "py3";
-                  abi = "none";
-                  platform = "manylinux_2_28_x86_64";
-                  sha256 = "abe498700566e90c89dbbf73731f850f4b5f7d2185bac88be71a34657b51fd3a";
+                  pyproject = true;
+                  src = "${livekitSrc}/livekit-rtc";
+                  postPatch = ''
+                    ${pkgs.unzip}/bin/unzip ${ffi} -d livekit/rtc/resources/
+                  '';
+                  build-system = [
+                    self.setuptools
+                    self.wheel
+                    self.requests
+                  ];
+                  nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+                    pkgs.autoPatchelfHook
+                  ];
+                  buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+                    pkgs.stdenv.cc.cc.lib
+                    pkgs.libva
+                  ];
+                  dependencies = [
+                    self.livekit-protocol
+                    self.protobuf
+                    self.types-protobuf
+                    self.numpy
+                    self.aiofiles
+                  ];
+                  doCheck = false;
                 };
-                nativeBuildInputs = [ pkgs.autoPatchelfHook ];
-                buildInputs = [
-                  pkgs.stdenv.cc.cc.lib
-                  pkgs.libva
-                ];
-                dependencies = [
-                  self.livekit-protocol
-                  self.protobuf
-                  self.numpy
-                  self.aiofiles
-                ];
-                doCheck = false;
-              };
             };
           };
         in
@@ -228,7 +271,6 @@
               (pythonWithPulse.withPackages (ps: [
                 ps.blessed
                 ps.soundfile
-                ps.opuslib_next
                 ps.numpy
                 ps.cryptography
                 ps.mypy
@@ -290,45 +332,68 @@
               av = super.av.override {
                 ffmpeg-headless = pkgs.ffmpeg;
               };
-              opuslib_next = self.buildPythonPackage {
-                pname = "opuslib_next";
-                version = "1.1.5";
-                src = pkgs.fetchPypi {
-                  pname = "opuslib_next";
-                  version = "1.1.5";
-                  sha256 = "6aec1015f25f799794d217601c74ea0fae8fd65d752578cb163fd2338ed075ce";
-                };
-                pyproject = true;
-                build-system = [ self.poetry-core ];
-                doCheck = false;
-              };
-              livekit = self.buildPythonPackage {
-                pname = "livekit";
-                version = "1.0.25";
-                format = "wheel";
-                src = pkgs.fetchPypi {
+              livekit =
+                let
+                  ffiPlatform =
+                    {
+                      "x86_64-linux" = {
+                        name = "ffi-linux-x86_64.zip";
+                        hash = "sha256-hfHCceQaf6H4mYNNpwVsIlz6ky1jBXdIdXzzYi+RPOw=";
+                      };
+                      "aarch64-linux" = {
+                        name = "ffi-linux-arm64.zip";
+                        hash = "sha256-6oBrzzOTutEvcIt3J/eHKY9IMgABIB1U65tz6yGgds4=";
+                      };
+                      "x86_64-darwin" = {
+                        name = "ffi-macos-x86_64.zip";
+                        hash = "sha256-Va9OfzVkOkneKXoBmT3nheHPK/ANXJevWpY6+r/WOZk=";
+                      };
+                      "aarch64-darwin" = {
+                        name = "ffi-macos-arm64.zip";
+                        hash = "sha256-stNRvB88UWAAHmp5XuUqyinijnbY0bnyjdd+HPcPnrM=";
+                      };
+                    }
+                    .${system};
+                  ffi = pkgs.fetchurl {
+                    url = "https://github.com/livekit/rust-sdks/releases/download/rust-sdks/livekit-ffi%400.12.44/${ffiPlatform.name}";
+                    hash = ffiPlatform.hash;
+                  };
+                  livekitSrc = pkgs.fetchFromGitHub {
+                    owner = "livekit";
+                    repo = "python-sdks";
+                    rev = "rtc-v1.0.25";
+                    hash = "sha256-O8WAwm2Dw7jgbZX8pOZ+h1KjwNvg91VgKFQZHkt0QJY=";
+                  };
+                in
+                self.buildPythonPackage {
                   pname = "livekit";
                   version = "1.0.25";
-                  format = "wheel";
-                  dist = "py3";
-                  python = "py3";
-                  abi = "none";
-                  platform = "manylinux_2_28_x86_64";
-                  sha256 = "abe498700566e90c89dbbf73731f850f4b5f7d2185bac88be71a34657b51fd3a";
+                  pyproject = true;
+                  src = "${livekitSrc}/livekit-rtc";
+                  postPatch = ''
+                    ${pkgs.unzip}/bin/unzip ${ffi} -d livekit/rtc/resources/
+                  '';
+                  build-system = [
+                    self.setuptools
+                    self.wheel
+                    self.requests
+                  ];
+                  nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+                    pkgs.autoPatchelfHook
+                  ];
+                  buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+                    pkgs.stdenv.cc.cc.lib
+                    pkgs.libva
+                  ];
+                  dependencies = [
+                    self.livekit-protocol
+                    self.protobuf
+                    self.types-protobuf
+                    self.numpy
+                    self.aiofiles
+                  ];
+                  doCheck = false;
                 };
-                nativeBuildInputs = [ pkgs.autoPatchelfHook ];
-                buildInputs = [
-                  pkgs.stdenv.cc.cc.lib
-                  pkgs.libva
-                ];
-                dependencies = [
-                  self.livekit-protocol
-                  self.protobuf
-                  self.numpy
-                  self.aiofiles
-                ];
-                doCheck = false;
-              };
             };
           };
           mypy = pkgs.writeShellScriptBin "mypy" ''
@@ -354,7 +419,6 @@
           pythonEnv = python.withPackages (ps: [
             ps.blessed
             ps.soundfile
-            ps.opuslib_next
             ps.numpy
             ps.cryptography
             ps.livekit-api

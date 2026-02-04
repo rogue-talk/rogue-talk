@@ -7,7 +7,6 @@ dependencies = [
     "av",
     "blessed",
     "soundfile",
-    "opuslib_next",
     "numpy",
     "cryptography",
     "livekit-api",
@@ -44,7 +43,7 @@ warn_return_any = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = ["opuslib_next", "opuslib_next.*", "soundfile", "blessed", "blessed.keyboard", "cryptography", "cryptography.*", "livekit", "livekit.*", "livekit_api", "livekit_api.*", "av", "av.*", "aiohttp", "aiohttp.*"]
+module = ["soundfile", "blessed", "blessed.keyboard", "cryptography", "cryptography.*", "livekit", "livekit.*", "livekit_api", "livekit_api.*", "av", "av.*", "aiohttp", "aiohttp.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
