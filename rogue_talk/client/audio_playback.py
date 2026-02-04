@@ -57,6 +57,9 @@ class PlayerAudioStream:
         self._overflow_count = 0
         self._underrun_count = 0
         self._frame_count = 0
+        # For crossfade on transitions to prevent clicks
+        self._was_silent = True  # Start silent, fade in first audio
+        self._last_sample: float = 0.0  # Last sample value for fade-out
 
     def start(self) -> None:
         """Start the audio output stream."""
@@ -170,6 +173,7 @@ class PlayerAudioStream:
                 if buffer_len >= self.MIN_BUFFER:
                     self._started = True
                 else:
+                    self._was_silent = True
                     return np.zeros(FRAME_SIZE, dtype=np.float32)
 
             if buffer_len >= FRAME_SIZE:
@@ -186,10 +190,27 @@ class PlayerAudioStream:
                         ]
                     )
                 self._read_pos = end_pos % buf_size
+
+                # Fade in if coming from silence
+                if self._was_silent:
+                    fade_in = np.linspace(0.0, 1.0, FRAME_SIZE, dtype=np.float32)
+                    frame = frame * fade_in
+                    self._was_silent = False
+
+                self._last_sample = float(frame[-1])
                 return frame
             else:
-                # Buffer empty - return silence, don't reset _started
+                # Buffer empty - fade out from last sample to prevent click
                 self._underrun_count += 1
+                if not self._was_silent and abs(self._last_sample) > 0.001:
+                    # Fade from last sample to zero
+                    frame = np.linspace(
+                        self._last_sample, 0.0, FRAME_SIZE, dtype=np.float32
+                    )
+                    self._was_silent = True
+                    self._last_sample = 0.0
+                    return frame
+                self._was_silent = True
                 return np.zeros(FRAME_SIZE, dtype=np.float32)
 
 
